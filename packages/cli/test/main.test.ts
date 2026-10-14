@@ -13,6 +13,12 @@ import { lineSplitter } from "../src/protocol.ts";
 
 import { PassThrough } from "node:stream";
 const w = vi.hoisted(() => ({ ensureWorker: vi.fn(async () => "http://w"), removeWorkspace: vi.fn(async () => {}) }));
+const d = vi.hoisted(() => ({ serveAgent: vi.fn() }));
+vi.mock("../src/daemon.ts", async (orig) => {
+  const m = await orig<Record<string, unknown>>();
+  d.serveAgent.mockImplementation(m.serveAgent as never);
+  return { ...m, serveAgent: d.serveAgent };
+});
 vi.mock("../src/worker.ts", async (orig) => ({ ...(await orig<object>()), ensureWorker: w.ensureWorker }));
 vi.mock("../src/backend-sandbox.ts", async (orig) => ({ ...(await orig<object>()), removeWorkspace: w.removeWorkspace }));
 
@@ -248,5 +254,12 @@ describe("main", () => {
       expect(await main([])).toBe(1);
       expect(err.mock.calls[0][0]).toContain("maihem prune [-f]");
     });
+  });
+  it("__agent exits the process after the agent shuts down", async () => {
+    d.serveAgent.mockResolvedValueOnce({ done: Promise.resolve(), shutdown: vi.fn(), sock: "s" } as never);
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    await main(["__agent", "x"]);
+    expect(exit).toHaveBeenCalledWith(0);
+    exit.mockRestore();
   });
 });

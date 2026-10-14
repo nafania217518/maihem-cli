@@ -181,6 +181,7 @@ export async function main(argv: string[]): Promise<number> {
       case "__agent": {
         if (!rest[0]) break;
         await (await serveAgent(rest[0])).done;
+        process.exit(0); // dedicated daemon: do not wait for stray library handles
         return 0;
       }
     }

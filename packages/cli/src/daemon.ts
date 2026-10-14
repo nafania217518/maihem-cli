@@ -36,7 +36,9 @@ export async function serveAgent(id: string, opts: { model?: LanguageModel } = {
   const server = net.createServer((c) => {
     clients.add(c);
     c.write(encode({ type: "hello", name: def.name, model: def.model, provider: def.provider, sandbox: def.sandbox, id, readonly, workdir: def.workdir!, history: agent.history }));
-    c.on("data", lineSplitter((o) => { const m = o as ClientMessage; if (m.type === "msg") void handle(m.text, c); else if (m.type === "stop") void shutdown(m.apply); }));
+    c.on("data", lineSplitter((o) => { const m = o as ClientMessage; if (m.type === "msg") void handle(m.text, c);
+      else if (m.type === "interrupt") { if (readonly) c.write(encode({ type: "error", message: "read-only: this agent runs one task" })); else agent.interrupt(); }
+      else if (m.type === "stop") void shutdown(m.apply); }));
     const drop = (): void => { clients.delete(c); };
     c.on("close", drop);
     c.on("error", drop);

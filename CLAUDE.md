@@ -17,3 +17,6 @@
 - Docker Agent covers the same CLI surface; MAIHEM's point is the Cloudflare workspace : README.md
 - Node 26 strips types but does not compile JSX; the Ink UI uses React.createElement in .ts : packages/cli/src/ui/App.ts
 - macOS caps unix socket paths at 104 bytes; agent sockets live in os.tmpdir(), not MAIHEM_HOME : packages/cli/src/state.ts
+- marked-terminal 7 needs marked <16, and @types/marked-terminal pins marked <12; marked is pinned to 15 with a local type declaration : packages/cli/src/types/marked-terminal.d.ts
+- Ink 8 alternateScreen hides terminal scrollback; the attach TUI scrolls the chat itself (PgUp/PgDn, Home/End) : packages/cli/src/ui/App.ts
+- ollama@0.6.4 ignores the abort signal that ai-sdk-ollama passes; model.ts calls client.abort() through stream middleware so an interrupt cancels the request : packages/cli/src/model.ts

@@ -44,7 +44,19 @@ maihem logs <id>
 maihem stop <id>          # copies sandbox work back; --discard skips that
 ```
 
-Esc or Ctrl+C in the chat asks `Stop agent <id>? [y/N]`.
+The chat is full screen. The header shows the agent, the footer shows key hints, and `?` lists all keys.
+
+| Key | Action |
+|---|---|
+| Enter | send the message |
+| Esc | interrupt the running turn; when idle, leave the chat |
+| Ctrl+C | leave the chat |
+| Ctrl+O | switch between the simplified and the detailed view |
+| PgUp / PgDn, Shift+↑ / ↓, Home / End | scroll the chat |
+
+The detailed view adds full tool input and output, timestamps, model steps, and tokens and time per turn.
+
+Leaving the chat asks `Stop agent <id>? [y/N]`.
 Any answer other than y detaches, and the agent keeps running.
 For a sandboxed agent, y then asks `Apply changes to <workdir>? [Y/n]`.
 n discards the sandbox work.

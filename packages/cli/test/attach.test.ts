@@ -37,7 +37,7 @@ describe("attach", () => {
     io.stdin.write("\r");
     await new Promise((r) => setTimeout(r, 100));
     expect(received).toEqual([{ type: "msg", text: "hey" }]);
-    expect(io.out()).toContain("bot · p/m");
+    expect(io.out()).toContain("p/m · no-sandbox");
     expect(io.out()).toContain("echo:hey");
     io.stdin.write("\u001b");
     await new Promise((r) => setTimeout(r, 50));
@@ -60,6 +60,21 @@ describe("attach", () => {
     io.stdin.write("y");
     await done;
     expect(received).toEqual([{ type: "stop", apply: true }]);
+  });
+
+  it("interrupt sends an interrupt message over the socket", async () => {
+    const received: unknown[] = [];
+    server = net.createServer((c) => {
+      c.write(encode({ type: "hello", name: "bot", model: "m", provider: "p", sandbox: false, id: "x1", readonly: false, workdir: "/w", history: [] }) + encode({ type: "user", text: "q" }));
+      c.on("data", lineSplitter((o) => { received.push(o); c.end(); }));
+    });
+    await new Promise<void>((r) => server.listen(sockPath, r));
+    const io = fakeIo();
+    const done = attach(sockPath, { stdin: io.stdin, stdout: io.stdout });
+    await new Promise((r) => setTimeout(r, 100));
+    io.stdin.write("\u001b");
+    await done;
+    expect(received).toEqual([{ type: "interrupt" }]);
   });
 
   it("rejects when the socket does not exist", async () => {

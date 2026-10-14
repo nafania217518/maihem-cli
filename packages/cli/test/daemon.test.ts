@@ -67,12 +67,12 @@ describe("daemon", () => {
     expect(c.events[0]).toMatchObject({ type: "hello", name: "bot", model: "m", sandbox: false, id, history: [] });
     c.send("do it");
     await c.wait("done");
-    expect(c.events.slice(1).map((e) => e.type)).toEqual(["user", "tool", "tool-result", "text", "done"]);
+    expect(c.events.slice(1).map((e) => e.type)).toEqual(["user", "step", "tool", "tool-result", "step", "text", "done"]);
     expect(fs.readFileSync(path.join(work, "out.txt"), "utf8")).toBe("data");
     expect(out).toContain("answer");
     const c2 = client(handle.sock);
     await c2.wait("hello");
-    expect((c2.events[0] as { history: AgentEvent[] }).history.map((e) => e.type)).toEqual(["user", "tool", "tool-result", "text", "done"]);
+    expect((c2.events[0] as { history: AgentEvent[] }).history.map((e) => e.type)).toEqual(["user", "step", "tool", "tool-result", "step", "text", "done"]);
     c.end(); c2.end();
   });
   it("msg while busy gets a busy error", async () => {
@@ -107,7 +107,7 @@ describe("daemon", () => {
     await c.wait("hello");
     c.send("x");
     await c.wait("error");
-    expect(c.events.at(-1)).toEqual({ type: "error", message: "boom" });
+    expect(c.events.at(-1)).toMatchObject({ type: "error", message: "boom" });
     c.end();
   });
   it("shutdown marks exited, removes sock and run.json, resolves done", async () => {
@@ -204,5 +204,34 @@ describe("daemon", () => {
     const bad = { ...loadState(id), sock: "/nonexistent-dir/" + "y".repeat(120) + ".sock" };
     saveState(bad);
     await expect(serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) })).rejects.toThrow();
+  });
+  const slow = () => ({ stream: simulateReadableStream<LanguageModelV4StreamPart>({ chunks: [{ type: "text-start", id: "t" }, ...Array.from({ length: 50 }, () => ({ type: "text-delta" as const, id: "t", delta: "z" })), { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "stop", raw: "" }, usage }], chunkDelayInMs: 20 }) });
+  it("interrupt message aborts the running turn", async () => {
+    setup();
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: [slow(), steps()[1]] }) });
+    const c = client(handle.sock);
+    await c.wait("hello");
+    c.send("one");
+    await c.wait("text");
+    c.raw({ type: "interrupt" });
+    await c.wait("done");
+    expect(c.events.at(-1)).toMatchObject({ type: "done", interrupted: true });
+    c.send("two");
+    await c.wait("done", 2);
+    expect(c.events.at(-1)).toMatchObject({ type: "done" });
+    expect(c.events.some((e) => e.type === "error")).toBe(false);
+    c.end();
+  });
+  it("interrupt on a read-only agent is rejected", async () => {
+    setup({ mode: "run", task: "go" });
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: [slow()] }) });
+    const c = client(handle.sock);
+    await c.wait("text");
+    c.raw({ type: "interrupt" });
+    await c.wait("error");
+    expect(c.events.find((e) => e.type === "error")).toEqual({ type: "error", message: "read-only: this agent runs one task" });
+    await c.wait("done");
+    expect(c.events.find((e) => e.type === "done")).not.toHaveProperty("interrupted");
+    c.end();
   });
 });

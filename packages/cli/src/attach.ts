@@ -23,8 +23,9 @@ export function attach(
           send: (text) => sock.write(encode({ type: "msg", text })),
           detach: () => sock.end(),
           stop: (apply) => sock.write(encode({ type: "stop", apply })),
+          interrupt: () => sock.write(encode({ type: "interrupt" })),
         }),
-        { ...io, exitOnCtrlC: false, patchConsole: false },
+        { ...io, alternateScreen: true, exitOnCtrlC: false, patchConsole: false },
       );
       sock.once("close", () => {
         app.unmount();

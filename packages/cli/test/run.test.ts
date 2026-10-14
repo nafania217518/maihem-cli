@@ -8,7 +8,7 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { main } from "../src/main.ts";
 import { listStates } from "../src/state.ts";
 import { Readable } from "node:stream";
-import { deps, launchCommand, runFile } from "../src/run.ts";
+import { deps, launchCommand, printEvent, runFile } from "../src/run.ts";
 import { resolveRunArgs } from "../src/main.ts";
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
@@ -134,5 +134,10 @@ describe("run", () => {
     delete process.env.OPENAI_API_KEY;
     expect(await main(["run", "--provider", "openai", "--model", "m", "--no-sandbox", "x"])).toBe(1);
     expect(err).toMatch(/error: no API key for openai/);
+  });
+  it("printEvent shows the first output line of a tool result", () => {
+    printEvent({ type: "tool-result", id: "c1", name: "x", ok: true, output: "line one " + "y".repeat(100) + "\nline two" });
+    printEvent({ type: "tool-result", id: "c2", name: "x", ok: false, output: "bad" });
+    expect(err).toBe(`\x1b[2m  → ✓ ${("line one " + "y".repeat(100)).slice(0, 80)}\x1b[0m\n\x1b[2m  → ✗ bad\x1b[0m\n`);
   });
 });

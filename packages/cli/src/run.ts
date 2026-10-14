@@ -28,7 +28,7 @@ const dim = (s: string): string => `\x1b[2m${s}\x1b[0m`;
 export function printEvent(e: AgentEvent): void {
   if (e.type === "text") process.stdout.write(e.delta);
   else if (e.type === "tool") process.stderr.write(dim(`⚙ ${e.name}`) + "\n");
-  else if (e.type === "tool-result") process.stderr.write(dim(`  → ${e.ok ? "✓" : "✗"} ${e.preview}`) + "\n");
+  else if (e.type === "tool-result") process.stderr.write(dim(`  → ${e.ok ? "✓" : "✗"} ${e.output.split("\n")[0].slice(0, 80)}`) + "\n");
 }
 
 export const runFile = (id: string): string => path.join(home(), "agents", `${id}.run.json`);

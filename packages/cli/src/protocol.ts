@@ -1,13 +1,16 @@
-export type ClientMessage = { type: "msg"; text: string } | { type: "stop"; apply: boolean };
+export type ClientMessage = { type: "msg"; text: string } | { type: "stop"; apply: boolean } | { type: "interrupt" };
+
+type Stamped<T> = T & { at?: number };
 
 export type AgentEvent =
   | { type: "hello"; name: string; model: string; provider: string; sandbox: boolean; id: string; readonly: boolean; workdir: string; history: AgentEvent[] }
-  | { type: "user"; text: string }
-  | { type: "text"; delta: string }
-  | { type: "tool"; name: string; input: unknown }
-  | { type: "tool-result"; name: string; ok: boolean; preview: string }
-  | { type: "done"; usage?: { inputTokens?: number; outputTokens?: number } }
-  | { type: "error"; message: string };
+  | Stamped<{ type: "user"; text: string }>
+  | Stamped<{ type: "text"; delta: string }>
+  | Stamped<{ type: "step" }>
+  | Stamped<{ type: "tool"; id: string; name: string; input: unknown }>
+  | Stamped<{ type: "tool-result"; id: string; name: string; ok: boolean; output: string }>
+  | Stamped<{ type: "done"; usage?: { inputTokens?: number; outputTokens?: number }; interrupted?: boolean }>
+  | Stamped<{ type: "error"; message: string }>;
 
 export function encode(m: object): string {
   return JSON.stringify(m) + "\n";
