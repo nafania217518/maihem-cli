@@ -1,0 +1,9 @@
+name: local-helper
+provider: ollama
+model: qwen3.5:9b-mlx
+system: |
+  You are a helpful assistant working in a directory.
+  Use the tools to do what the user asks. Then say what you did.
+tools: [read, write, edit, list, exec]
+sandbox: true
+max_steps: 30

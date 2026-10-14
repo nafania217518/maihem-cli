@@ -1,0 +1,10 @@
+name: reviewer
+provider: anthropic
+model: claude-sonnet-5-5
+system: |
+  You review code. Read files, run checks with exec, and report findings.
+  Do not change files unless asked.
+tools: [read, list, exec]
+sandbox: true
+max_steps: 50
+# api_key: sk-ant-...   # optional. Else: --api-key, or ANTHROPIC_API_KEY

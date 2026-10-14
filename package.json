@@ -1,0 +1,28 @@
+{
+  "name": "maihem",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "vitest run --coverage --exclude '**/*.int.test.ts'",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --no-coverage --no-file-parallelism packages/cli/test/*.int.test.ts packages/worker/test/*.int.test.ts",
+    "typecheck": "tsc -p packages/cli && tsc -p packages/worker --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@vitest/coverage-v8": "5.0.4",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  },
+  "engines": {
+    "node": ">=26"
+  },
+  "allowScripts": {
+    "workerd@1.20261012.1": true,
+    "esbuild@0.28.2": true,
+    "fsevents@2.3.3": true
+  }
+}
