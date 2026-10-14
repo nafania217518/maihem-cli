@@ -29,6 +29,10 @@ export async function writeBytes(baseUrl: string, id: string, p: string, bytes: 
   await call(`${baseUrl}/w/${id}/file${workspacePath(p)}`, { method: "PUT", body: bytes as BodyInit });
 }
 
+export async function removeWorkspace(baseUrl: string, id: string): Promise<void> {
+  await call(`${baseUrl}/w/${id}`, { method: "DELETE" });
+}
+
 export interface SandboxBackend extends Backend {
   listFiles(): Promise<{ path: string; size: number; mtime: number }[]>;
   readBytes(p: string): Promise<Uint8Array>;

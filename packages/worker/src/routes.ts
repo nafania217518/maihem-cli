@@ -3,6 +3,7 @@ export type Route =
   | { kind: "file"; id: string; path: string }
   | { kind: "files"; id: string }
   | { kind: "exec"; id: string }
+  | { kind: "delete"; id: string }
   | { kind: "method" };
 
 const ID = "([A-Za-z0-9_-]+)";
@@ -10,6 +11,7 @@ const TABLE: [RegExp, string[], (m: RegExpMatchArray) => Route | null][] = [
   [/^\/health$/, ["GET"], () => ({ kind: "health" })],
   [new RegExp(`^/w/${ID}/file(/.*)$`), ["GET", "PUT"], (m) => filePath(m[1], m[2])],
   [new RegExp(`^/w/${ID}/files$`), ["GET"], (m) => ({ kind: "files", id: m[1] })],
+  [new RegExp(`^/w/${ID}$`), ["DELETE"], (m) => ({ kind: "delete", id: m[1] })],
   [new RegExp(`^/w/${ID}/exec$`), ["POST"], (m) => ({ kind: "exec", id: m[1] })],
 ];
 

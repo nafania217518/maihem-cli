@@ -4,9 +4,11 @@ import YAML from "yaml";
 import { applyOverrides, definitionFromFlags, loadDefinition, mask } from "./definition.ts";
 import type { Definition } from "./definition.ts";
 import { listImages, loadImage, removeImage, saveImage } from "./registry.ts";
-import { isAlive, listStates, loadState, refresh, saveState } from "./state.ts";
-import { startWorker, stopWorker, workerStatus } from "./worker.ts";
-import { launchCommand, runCommand, runFile } from "./run.ts";
+import { isAlive, listStates, loadState, refresh, removeState, saveState } from "./state.ts";
+import { ensureWorker, startWorker, stopWorker, workerStatus } from "./worker.ts";
+import { removeWorkspace } from "./backend-sandbox.ts";
+import readline from "node:readline/promises";
+import { deps, launchCommand, runCommand, runFile } from "./run.ts";
 import { encode } from "./protocol.ts";
 import net from "node:net";
 import { attach } from "./attach.ts";
@@ -24,6 +26,7 @@ const USAGE = `usage:
   maihem stop [--discard] ID
   maihem attach ID
   maihem logs ID
+  maihem prune [-f]
   maihem worker start|stop|status`;
 
 const RUN_OPTIONS = {
@@ -86,6 +89,24 @@ async function stop(id: string, discard: boolean): Promise<void> {
   fs.rmSync(runFile(id), { force: true });
   fs.rmSync(s.sock, { force: true });
   console.log(`stopped ${id}`);
+}
+
+async function prune(force: boolean): Promise<void> {
+  const dead = listStates().map(refresh).filter((s) => s.status === "exited");
+  if (!dead.length) return console.log("nothing to prune");
+  if (!force) {
+    if (!deps.stdin.isTTY) throw new Error("prune needs -f when stdin is not a terminal");
+    const rl = readline.createInterface({ input: deps.stdin, output: process.stdout });
+    const answer = await rl.question(`This removes ${dead.length} stopped agents. Continue? [y/N] `);
+    rl.close();
+    if (answer.trim().toLowerCase() !== "y") return;
+  }
+  const url = dead.some((s) => s.sandbox) ? await ensureWorker() : "";
+  for (const s of dead) {
+    if (s.sandbox) await removeWorkspace(url, s.id);
+    removeState(s);
+    console.log(s.id);
+  }
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -154,6 +175,9 @@ export async function main(argv: string[]): Promise<number> {
         process.stdout.write(fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
         return 0;
       }
+      case "prune":
+        await prune(rest[0] === "-f" || rest[0] === "--force");
+        return 0;
       case "__agent": {
         if (!rest[0]) break;
         await (await serveAgent(rest[0])).done;

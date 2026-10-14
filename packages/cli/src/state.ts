@@ -61,3 +61,8 @@ export function refresh(s: AgentState): AgentState {
   }
   return s;
 }
+
+export function removeState(s: AgentState): void {
+  if (fs.existsSync(dir())) for (const f of fs.readdirSync(dir())) if (f.startsWith(`${s.id}.`)) fs.rmSync(path.join(dir(), f), { force: true });
+  fs.rmSync(s.sock, { force: true });
+}

@@ -57,3 +57,10 @@ it("GET missing file returns 404", async () => {
   expect(r.status).toBe(404);
   expect(await r.json()).toHaveProperty("error");
 });
+
+it("DELETE clears the workspace", async () => {
+  const id = `${ID}del`;
+  await fetch(`${BASE}/w/${id}/file/workspace/x.txt`, { method: "PUT", body: "x" });
+  expect((await fetch(`${BASE}/w/${id}`, { method: "DELETE" })).status).toBe(204);
+  expect(await fetch(`${BASE}/w/${id}/files`).then((r) => r.json())).toEqual([]);
+});

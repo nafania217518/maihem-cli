@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { newId, saveState, loadState, listStates, isAlive, refresh, logPath, sockPath } from "../src/state.ts";
+import { newId, saveState, loadState, listStates, isAlive, refresh, logPath, sockPath, removeState } from "../src/state.ts";
 import type { AgentState } from "../src/state.ts";
 
 const mk = (id: string, started: string, pid = process.pid): AgentState => ({
@@ -54,5 +54,16 @@ describe("state", () => {
     expect(loadState("dead").status).toBe("exited");
     const live = mk("live", "2026-01-01T00:00:00.000Z");
     expect(refresh(live).status).toBe("running");
+  });
+  it("removeState deletes the state, log, run file and socket", () => {
+    const a = mk("rm1", "2026-01-01T00:00:00.000Z");
+    const b = mk("keep", "2026-01-01T00:00:00.000Z");
+    saveState(a); saveState(b);
+    const dir = path.join(home, "agents");
+    fs.writeFileSync(a.log, ""); fs.writeFileSync(path.join(dir, "rm1.run.json"), "{}"); fs.writeFileSync(a.sock, "");
+    removeState(a);
+    expect(fs.readdirSync(dir)).toEqual(["keep.json"]);
+    expect(fs.existsSync(a.sock)).toBe(false);
+    removeState(a);
   });
 });

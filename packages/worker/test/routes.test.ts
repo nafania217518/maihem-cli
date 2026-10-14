@@ -29,6 +29,10 @@ describe("matchRoute", () => {
     expect(matchRoute("POST", "/w/a1/files")).toEqual({ kind: "method" });
     expect(matchRoute("GET", "/w/a1/exec")).toEqual({ kind: "method" });
   });
+  it("DELETE /w/:id matches a delete route", () => {
+    expect(matchRoute("DELETE", "/w/abc")).toEqual({ kind: "delete", id: "abc" });
+    expect(matchRoute("GET", "/w/abc")).toEqual({ kind: "method" });
+  });
   it("returns null for unknown paths", () => {
     expect(matchRoute("GET", "/nope")).toBeNull();
     expect(matchRoute("GET", "/w/bad id/files")).toBeNull();

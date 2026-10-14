@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import http from "node:http";
-import { createSandboxBackend, listFiles, readBytes, writeBytes, workspacePath } from "../src/backend-sandbox.ts";
+import { createSandboxBackend, removeWorkspace, listFiles, readBytes, writeBytes, workspacePath } from "../src/backend-sandbox.ts";
 
 const files = new Map<string, Buffer>();
 const reqs: { method: string; url: string; body: string }[] = [];
@@ -12,6 +12,7 @@ const server = http.createServer((req, res) => {
   req.on("end", () => {
     const body = Buffer.concat(chunks);
     reqs.push({ method: req.method!, url: req.url!, body: body.toString() });
+    if (req.method === "DELETE") return res.writeHead(req.url === "/w/boom" ? 500 : 204).end();
     const m = req.url!.match(/^\/w\/([^/]+)\/(file(\/.*)|files|exec)$/)!;
     if (m[1] === "boom") return res.writeHead(500).end("kaboom");
     m.shift();
@@ -68,5 +69,15 @@ describe("createSandboxBackend", () => {
     await be().writeBytes("bin2.dat", bytes);
     expect(await listFiles(base, "ws")).toContainEqual({ path: "/workspace/bin2.dat", size: 3, mtime: 1 });
     expect(await be().listFiles()).toContainEqual({ path: "/workspace/bin.dat", size: 3, mtime: 1 });
+  });
+});
+
+describe("removeWorkspace", () => {
+  it("removeWorkspace sends DELETE /w/:id", async () => {
+    await removeWorkspace(base, "ws1");
+    expect(reqs.at(-1)).toMatchObject({ method: "DELETE", url: "/w/ws1" });
+  });
+  it("removeWorkspace throws on a failed response", async () => {
+    await expect(removeWorkspace(base, "boom")).rejects.toThrow(/500/);
   });
 });

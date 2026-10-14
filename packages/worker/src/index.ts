@@ -23,7 +23,11 @@ export class Maihem extends withWorkspace(
       ],
     };
   },
-) {}
+) {
+  async destroy(): Promise<void> {
+    await (this as unknown as { ctx: DurableObjectState }).ctx.storage.deleteAll();
+  }
+}
 
 type Ws = Awaited<ReturnType<typeof getWorkspace>>;
 type FileInfo = { path: string; size: number; mtime: number };
@@ -47,6 +51,10 @@ export default {
     if (route.kind === "method") return json({ error: "method not allowed" }, 405);
     if (route.kind === "health") return new Response("ok");
     try {
+      if (route.kind === "delete") {
+        await (env.Maihem.get(env.Maihem.idFromName(route.id)) as unknown as { destroy(): Promise<void> }).destroy();
+        return new Response(null, { status: 204 });
+      }
       using ws = await getWorkspace(env.Maihem.get(env.Maihem.idFromName(route.id)) as never);
       if (route.kind === "file" && request.method === "PUT") {
         await ws.fs.mkdir(route.path.slice(0, route.path.lastIndexOf("/")), { recursive: true });

@@ -11,6 +11,11 @@ import net from "node:net";
 import { deps, runFile } from "../src/run.ts";
 import { lineSplitter } from "../src/protocol.ts";
 
+import { PassThrough } from "node:stream";
+const w = vi.hoisted(() => ({ ensureWorker: vi.fn(async () => "http://w"), removeWorkspace: vi.fn(async () => {}) }));
+vi.mock("../src/worker.ts", async (orig) => ({ ...(await orig<object>()), ensureWorker: w.ensureWorker }));
+vi.mock("../src/backend-sandbox.ts", async (orig) => ({ ...(await orig<object>()), removeWorkspace: w.removeWorkspace }));
+
 const def = (name: string) => parseDefinition(JSON.stringify({ name, provider: "openai", model: "gpt" }));
 
 describe("main", () => {
@@ -166,5 +171,82 @@ describe("main", () => {
   });
   it("resolveRunArgs: missing source returns usage error", () => {
     expect(() => resolveRunArgs([])).toThrow(/usage/i);
+  });
+  describe("prune", () => {
+    const agent = (id: string, pid: number, sandbox = false) =>
+      saveState({ id, name: "a", pid, status: "running", workdir: "/w", sandbox, started: "2026-01-01T00:00:00.000Z", log: logPath(id), sock: sockPath(id) });
+    const has = (id: string) => fs.existsSync(path.join(home, "agents", `${id}.json`));
+    const origStdin = deps.stdin;
+    const tty = (answer: string) => {
+      const s = Object.assign(new PassThrough(), { isTTY: true });
+      s.write(answer);
+      deps.stdin = s;
+    };
+    let write: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      w.ensureWorker.mockClear();
+      w.removeWorkspace.mockReset().mockResolvedValue(undefined);
+      write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    });
+    afterEach(() => { deps.stdin = origStdin; });
+
+    it("prune -f removes stopped agents and keeps running ones", async () => {
+      agent("dead1", 999999);
+      agent("live1", process.pid);
+      fs.writeFileSync(logPath("dead1"), "x");
+      expect(await main(["prune", "-f"])).toBe(0);
+      expect(has("dead1")).toBe(false);
+      expect(fs.existsSync(logPath("dead1"))).toBe(false);
+      expect(has("live1")).toBe(true);
+      expect(out()).toContain("dead1");
+    });
+    it("prune -f clears sandbox data in the worker for sandboxed agents", async () => {
+      agent("nosb", 999999);
+      expect(await main(["prune", "-f"])).toBe(0);
+      expect(w.ensureWorker).not.toHaveBeenCalled();
+      agent("sb1", 999999, true);
+      agent("nosb2", 999999);
+      expect(await main(["prune", "-f"])).toBe(0);
+      expect(w.ensureWorker).toHaveBeenCalledTimes(1);
+      expect(w.removeWorkspace).toHaveBeenCalledWith("http://w", "sb1");
+      expect(w.removeWorkspace).toHaveBeenCalledTimes(1);
+    });
+    it("prune keeps local files when the worker delete fails", async () => {
+      agent("sb2", 999999, true);
+      w.removeWorkspace.mockRejectedValue(new Error("worker 500: x"));
+      expect(await main(["prune", "-f"])).toBe(1);
+      expect(err.mock.calls[0][0]).toMatch(/^error: /);
+      expect(has("sb2")).toBe(true);
+    });
+    it("prune asks for confirmation and y removes", async () => {
+      agent("d1", 999999);
+      tty("y\n");
+      expect(await main(["prune"])).toBe(0);
+      expect(write.mock.calls.map((c: unknown[]) => String(c[0])).join("")).toContain("This removes 1 stopped agents. Continue? [y/N] ");
+      expect(has("d1")).toBe(false);
+    });
+    it("prune answer other than y removes nothing", async () => {
+      agent("d2", 999999);
+      tty("n\n");
+      expect(await main(["prune"])).toBe(0);
+      expect(has("d2")).toBe(true);
+    });
+    it("prune without a terminal and without -f refuses", async () => {
+      agent("d3", 999999);
+      deps.stdin = new PassThrough();
+      expect(await main(["prune"])).toBe(1);
+      expect(err.mock.calls[0][0]).toBe("error: prune needs -f when stdin is not a terminal");
+      expect(has("d3")).toBe(true);
+    });
+    it("prune with no stopped agents says nothing to prune", async () => {
+      agent("live2", process.pid);
+      expect(await main(["prune"])).toBe(0);
+      expect(out()).toBe("nothing to prune");
+      expect(write).not.toHaveBeenCalled();
+    });
+    it("usage lists prune", async () => {
+      expect(await main([])).toBe(1);
+      expect(err.mock.calls[0][0]).toContain("maihem prune [-f]");
+    });
   });
 });
