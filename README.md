@@ -28,13 +28,26 @@ maihem run -f examples/ollama.yaml "summarise README.md into SUMMARY.md"
 # same, but with real bash and real files in the current directory
 maihem run --no-sandbox -f examples/ollama.yaml "run the tests and fix the failing one"
 
-# keep the agent alive and chat with it
-maihem run -d -f examples/anthropic.yaml --api-key sk-ant-...
+# task from a pipe
+cat task.md | maihem run -f examples/ollama.yaml
+
+# task in the background; the agent stops itself when the task ends
+maihem run -d -f examples/ollama.yaml "add tests for src/util.ts"
+maihem attach <id>        # read-only view while the task runs
+
+# chat with an agent; the first message is optional
+maihem launch -f examples/anthropic.yaml --api-key sk-ant-... "review the last commit"
+maihem launch -d reviewer # start it without opening the chat
 maihem ps
-maihem attach <id>        # Esc or Ctrl+C detaches, the agent keeps running
+maihem attach <id>
 maihem logs <id>
-maihem stop <id>
+maihem stop <id>          # copies sandbox work back; --discard skips that
 ```
+
+Esc or Ctrl+C in the chat asks `Stop agent <id>? [y/N]`.
+Any answer other than y detaches, and the agent keeps running.
+For a sandboxed agent, y then asks `Apply changes to <workdir>? [Y/n]`.
+n discards the sandbox work.
 
 ## Definitions
 
@@ -63,14 +76,14 @@ maihem run reviewer "review the last commit"
 maihem rmi reviewer
 ```
 
-`run` accepts three sources: `-f FILE`, a registry `NAME`, or inline flags
+`run` and `launch` accept three sources: `-f FILE`, a registry `NAME`, or inline flags
 `--provider P --model M [--system S] [--tools a,b] [--base-url U]`.
 
 ## Sandbox mode
 
-- `maihem run` starts the worker on first use (`maihem worker start|stop|status` to manage it).
+- `maihem run` and `maihem launch` start the worker on first use (`maihem worker start|stop|status` to manage it).
 - At start, every file that `git ls-files --cached --others --exclude-standard` lists is copied to `/workspace`.
-- At exit, new and changed files are copied back. Files are never deleted on the host.
+- At exit, new and changed files are copied back, unless you discard them. Files are never deleted on the host.
 - The shell is `just-bash` in an isolate: `cat`, `grep`, `sed`, `awk`, `jq`, `curl` work. `npm`, `node`, `python` do not. Use `--no-sandbox` for those.
 
 ## State

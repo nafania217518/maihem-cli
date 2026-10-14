@@ -10,6 +10,7 @@ export interface AppProps {
   subscribe: (cb: (e: AgentEvent) => void) => () => void;
   send: (text: string) => void;
   detach: () => void;
+  stop: (apply: boolean) => void;
 }
 
 type Line = { text: string; bold?: boolean; dim?: boolean; color?: string };
@@ -21,6 +22,7 @@ export function App(props: AppProps): React.ReactElement {
   const [live, setLive] = useState<string | null>(null);
   const [frame, setFrame] = useState(0);
   const [input, setInput] = useState("");
+  const [ask, setAsk] = useState<null | "stop" | "apply" | "stopping">(null);
 
   useEffect(() => {
     const push = (l: Line) => setLines((ls) => [...ls, l]);
@@ -64,8 +66,24 @@ export function App(props: AppProps): React.ReactElement {
     return () => clearInterval(t);
   }, [busy]);
 
+  const halt = (apply: boolean) => {
+    setAsk("stopping");
+    props.stop(apply);
+  };
   useInput((ch, key) => {
-    if (key.escape || (key.ctrl && ch === "c")) props.detach();
+    const leave = key.escape || (key.ctrl && ch === "c");
+    if (ask === "stop") {
+      if (ch !== "y") props.detach();
+      else if (hello?.sandbox) setAsk("apply");
+      else halt(true);
+    } else if (ask === "apply") {
+      if (leave) props.detach();
+      else if (ch === "n") halt(false);
+      else if (key.return || ch === "y") halt(true);
+    } else if (!ask && leave) {
+      if (hello) setAsk("stop");
+      else props.detach();
+    }
   });
 
   const header = hello
@@ -84,19 +102,27 @@ export function App(props: AppProps): React.ReactElement {
       },
     }),
     busy ? h(Text, null, `agent ▸ ${live} ${FRAMES[frame]}`) : null,
-    h(
-      Box,
-      null,
-      h(Text, null, "› "),
-      h(TextInput, {
-        value: input,
-        onChange: setInput,
-        onSubmit: (v: string) => {
-          if (busy || !v.trim()) return;
-          props.send(v);
-          setInput("");
-        },
-      }),
-    ),
+    ask === "stop"
+      ? h(Text, null, `Stop agent ${hello?.id}? [y/N]`)
+      : ask === "apply"
+        ? h(Text, null, `Apply changes to ${hello?.workdir}? [Y/n]`)
+        : ask === "stopping"
+          ? h(Text, null, "stopping…")
+          : hello?.readonly
+            ? h(Text, { dimColor: true }, "read-only · Esc to leave")
+            : h(
+                Box,
+                null,
+                h(Text, null, "› "),
+                h(TextInput, {
+                  value: input,
+                  onChange: setInput,
+                  onSubmit: (v: string) => {
+                    if (busy || !v.trim()) return;
+                    props.send(v);
+                    setInput("");
+                  },
+                }),
+              ),
   );
 }

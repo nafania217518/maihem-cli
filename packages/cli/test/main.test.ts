@@ -7,7 +7,9 @@ import { main, resolveRunArgs } from "../src/main.ts";
 import { saveImage } from "../src/registry.ts";
 import { saveState, loadState, logPath, sockPath } from "../src/state.ts";
 import { parseDefinition } from "../src/definition.ts";
-import { runFile } from "../src/run.ts";
+import net from "node:net";
+import { deps, runFile } from "../src/run.ts";
+import { lineSplitter } from "../src/protocol.ts";
 
 const def = (name: string) => parseDefinition(JSON.stringify({ name, provider: "openai", model: "gpt" }));
 
@@ -73,6 +75,39 @@ describe("main", () => {
     expect(loadState("d1").status).toBe("exited");
     expect(fs.existsSync(runFile("d1"))).toBe(false);
     expect(fs.existsSync(sockPath("d1"))).toBe(false);
+  });
+  it("stop --discard sends a stop message without apply", async () => {
+    const sock = path.join(os.tmpdir(), `mh-stop-${process.pid}.sock`);
+    fs.rmSync(sock, { force: true });
+    const got: unknown[] = [];
+    const server = net.createServer((c) => c.on("data", lineSplitter((m) => { got.push(m); c.end(); })));
+    await new Promise<void>((r) => server.listen(sock, r));
+    saveState({ id: "s1", name: "a", pid: 999999, status: "running", workdir: "/w", sandbox: true, started: "2026-01-01T00:00:00.000Z", log: logPath("s1"), sock });
+    expect(await main(["stop", "--discard", "s1"])).toBe(0);
+    for (let i = 0; i < 50 && !got.length; i++) await new Promise((r) => setTimeout(r, 10));
+    server.close();
+    expect(got).toEqual([{ type: "stop", apply: false }]);
+    expect(loadState("s1").status).toBe("exited");
+  });
+  it("stop falls back to SIGTERM when the socket does not answer", async () => {
+    const child = spawn("sleep", ["30"]);
+    saveState({ id: "c2", name: "a", pid: child.pid!, status: "running", workdir: "/w", sandbox: true, started: "2026-01-01T00:00:00.000Z", log: logPath("c2"), sock: sockPath("c2") });
+    expect(await main(["stop", "c2"])).toBe(0);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(child.signalCode).toBe("SIGTERM");
+  });
+  it("launch is dispatched with the run source forms", async () => {
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    saveImage({ ...def("a"), api_key: "k" });
+    expect(await main(["launch", "a", "-d", "--no-sandbox", "hi"])).toBe(0);
+    const id = out();
+    expect(JSON.parse(fs.readFileSync(runFile(id), "utf8"))).toMatchObject({ task: "hi", mode: "chat", def: { name: "a", sandbox: false } });
+  });
+  it("usage lists launch", async () => {
+    expect(await main(["bogus"])).toBe(1);
+    expect(err.mock.calls[0][0]).toMatch(/maihem launch \[NAME \| -f FILE \| --provider P --model M\] \[FIRST_MESSAGE\] \[-d\]/);
+    expect(err.mock.calls[0][0]).toContain("maihem stop [--discard] ID");
+    expect(err.mock.calls[0][0]).toContain("[TASK] [-d] [--no-sandbox] [--workdir DIR] [--api-key KEY]");
   });
   it("unknown command returns 1 with usage", async () => {
     expect(await main(["bogus"])).toBe(1);

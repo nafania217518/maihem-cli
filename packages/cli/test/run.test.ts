@@ -7,7 +7,9 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { main } from "../src/main.ts";
 import { listStates } from "../src/state.ts";
-import { deps, runFile } from "../src/run.ts";
+import { Readable } from "node:stream";
+import { deps, launchCommand, runFile } from "../src/run.ts";
+import { resolveRunArgs } from "../src/main.ts";
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
 const stream = (chunks: LanguageModelV4StreamPart[]) => ({ stream: simulateReadableStream({ chunks }) });
@@ -71,11 +73,19 @@ describe("run", () => {
     expect(err).toContain("error: boom");
     expect(listStates()[0]).toMatchObject({ status: "exited", exitCode: 1 });
   });
-  it("no task returns 1", async () => {
+  it("run without a task on a TTY points to launch", async () => {
+    deps.stdin = Object.assign(Readable.from([]), { isTTY: true });
     expect(await main(args("--no-sandbox"))).toBe(1);
-    expect(err).toContain("error: run needs a task (or use -d)");
+    expect(err).toContain("error: run needs a task; use maihem launch for chat");
   });
-  it("detach spawns __agent, writes run.json and updates pid", async () => {
+  it("run without a task reads it from piped stdin", async () => {
+    deps.stdin = Readable.from(["piped task\n"]);
+    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    expect(await main(args("-d", "--no-sandbox"))).toBe(0);
+    expect(spawn).toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(runFile(listStates()[0].id), "utf8")).task).toBe("piped task");
+  });
+  it("run -d spawns a one-shot agent in run mode", async () => {
     const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
     expect(await main(args("-d", "--no-sandbox", "x"))).toBe(0);
     const [s] = listStates();
@@ -86,8 +96,39 @@ describe("run", () => {
     expect(argv).toEqual([expect.stringMatching(/bin\/maihem\.js$/), "__agent", s.id]);
     expect(opts).toMatchObject({ detached: true });
     expect(fs.statSync(runFile(s.id)).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(fs.readFileSync(runFile(s.id), "utf8"))).toMatchObject({ task: "x", apiKey: "k", def: { sandbox: false } });
+    expect(JSON.parse(fs.readFileSync(runFile(s.id), "utf8"))).toMatchObject({ task: "x", apiKey: "k", mode: "run", def: { sandbox: false } });
     expect(w.ensureWorker).not.toHaveBeenCalled();
+  });
+  const launch = (...a: string[]) => launchCommand(resolveRunArgs(args(...a).slice(1)));
+  it("launch -d prints the id without attaching", async () => {
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    const attach = vi.spyOn(deps, "attach").mockResolvedValue();
+    expect(await launch("-d", "--no-sandbox")).toBe(0);
+    const [s] = listStates();
+    expect(out).toBe(`${s.id}\n`);
+    expect(attach).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(runFile(s.id), "utf8")).mode).toBe("chat");
+  });
+  it("launch passes the first message to the agent", async () => {
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    expect(await launch("-d", "--no-sandbox", "hello there")).toBe(0);
+    expect(JSON.parse(fs.readFileSync(runFile(listStates()[0].id), "utf8"))).toMatchObject({ task: "hello there", mode: "chat" });
+  });
+  it("launch attaches once the socket exists", async () => {
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: process.pid, unref: vi.fn() } as never);
+    const attach = vi.spyOn(deps, "attach").mockResolvedValue();
+    deps.pollMs = 5;
+    setTimeout(() => fs.writeFileSync(listStates()[0].sock, ""), 30);
+    expect(await launch("--no-sandbox")).toBe(0);
+    const [s] = listStates();
+    expect(attach).toHaveBeenCalledWith(s.sock);
+    fs.rmSync(s.sock, { force: true });
+  });
+  it("launch fails with the logs hint when the agent dies before its socket opens", async () => {
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 999999, unref: vi.fn() } as never);
+    const attach = vi.spyOn(deps, "attach").mockResolvedValue();
+    expect((await launch("--no-sandbox").catch((e) => e)).message).toBe(`agent exited, see maihem logs ${listStates()[0].id}`);
+    expect(attach).not.toHaveBeenCalled();
   });
   it("missing key returns 1", async () => {
     delete process.env.OPENAI_API_KEY;

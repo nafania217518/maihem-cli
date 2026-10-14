@@ -11,21 +11,22 @@ function setup() {
   const unsub = vi.fn();
   const send = vi.fn();
   const detach = vi.fn();
+  const stop = vi.fn();
   const subscribe = (c: (e: AgentEvent) => void) => {
     cb = c;
     return unsub;
   };
-  const r = render(React.createElement(App, { subscribe, send, detach }));
+  const r = render(React.createElement(App, { subscribe, send, detach, stop }));
   const emit = async (...es: AgentEvent[]) => {
     await tick();
     for (const e of es) cb(e);
     await tick();
   };
-  return { ...r, emit, unsub, send, detach };
+  return { ...r, emit, unsub, send, detach, stop };
 }
 
 const hello: AgentEvent = {
-  type: "hello", name: "bot", model: "m1", provider: "p", sandbox: true, id: "abc", history: [],
+  type: "hello", name: "bot", model: "m1", provider: "p", sandbox: true, id: "abc", readonly: false, workdir: "/w", history: [],
 };
 
 describe("App", () => {
@@ -121,20 +122,83 @@ describe("App", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("Escape calls detach", async () => {
-    const { stdin, detach } = setup();
-    await tick();
-    stdin.write("\u001b");
-    await tick();
-    expect(detach).toHaveBeenCalled();
+  const key = async (stdin: { write: (s: string) => void }, ...ks: string[]) => {
+    for (const k of ks) { stdin.write(k); await tick(); }
+  };
+
+  it("Esc asks to stop the agent", async () => {
+    const { stdin, detach, emit, lastFrame } = setup();
+    await emit(hello);
+    await key(stdin, "\u001b");
+    expect(lastFrame()).toContain("Stop agent abc? [y/N]");
+    expect(detach).not.toHaveBeenCalled();
   });
 
-  it("Ctrl+C calls detach", async () => {
-    const { stdin, detach } = setup();
-    await tick();
-    stdin.write("\u0003");
-    await tick();
+  it("Ctrl+C asks to stop the agent", async () => {
+    const { stdin, detach, emit, lastFrame } = setup();
+    await emit(hello);
+    await key(stdin, "\u0003");
+    expect(lastFrame()).toContain("Stop agent abc? [y/N]");
+    expect(detach).not.toHaveBeenCalled();
+  });
+
+  it("a key other than y detaches without stopping", async () => {
+    for (const k of ["n", "\r"]) {
+      const { stdin, detach, stop, emit } = setup();
+      await emit(hello);
+      await key(stdin, "\u001b", k);
+      expect(detach).toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+    }
+  });
+
+  it("y on a no-sandbox agent stops it with apply", async () => {
+    const { stdin, detach, stop, emit, lastFrame } = setup();
+    await emit({ ...hello, sandbox: false } as AgentEvent);
+    await key(stdin, "\u001b", "y");
+    expect(stop).toHaveBeenCalledWith(true);
+    expect(detach).not.toHaveBeenCalled();
+    expect(lastFrame()).toContain("stopping…");
+  });
+
+  it("y on a sandboxed agent asks to apply changes", async () => {
+    const { stdin, stop, emit, lastFrame } = setup();
+    await emit(hello);
+    await key(stdin, "\u001b", "y");
+    expect(lastFrame()).toContain("Apply changes to /w? [Y/n]");
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("Enter on the apply question stops and applies", async () => {
+    const { stdin, stop, emit, lastFrame } = setup();
+    await emit(hello);
+    await key(stdin, "\u001b", "y", "\r");
+    expect(stop).toHaveBeenCalledWith(true);
+    expect(lastFrame()).toContain("stopping…");
+  });
+
+  it("n on the apply question stops and discards", async () => {
+    const { stdin, stop, emit } = setup();
+    await emit(hello);
+    await key(stdin, "\u001b", "y", "n");
+    expect(stop).toHaveBeenCalledWith(false);
+  });
+
+  it("Esc on the apply question detaches", async () => {
+    const { stdin, stop, detach, emit } = setup();
+    await emit(hello);
+    await key(stdin, "\u001b", "y", "\u001b");
     expect(detach).toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("readonly hides the input and shows read-only", async () => {
+    const { stdin, send, emit, lastFrame } = setup();
+    await emit({ ...hello, readonly: true } as AgentEvent);
+    await key(stdin, "hi", "\r");
+    expect(lastFrame()).toContain("read-only · Esc to leave");
+    expect(lastFrame()).not.toContain("› ");
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("unsubscribe called on unmount", () => {

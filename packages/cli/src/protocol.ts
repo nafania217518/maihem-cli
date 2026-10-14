@@ -1,7 +1,7 @@
-export type ClientMessage = { type: "msg"; text: string };
+export type ClientMessage = { type: "msg"; text: string } | { type: "stop"; apply: boolean };
 
 export type AgentEvent =
-  | { type: "hello"; name: string; model: string; provider: string; sandbox: boolean; id: string; history: AgentEvent[] }
+  | { type: "hello"; name: string; model: string; provider: string; sandbox: boolean; id: string; readonly: boolean; workdir: string; history: AgentEvent[] }
   | { type: "user"; text: string }
   | { type: "text"; delta: string }
   | { type: "tool"; name: string; input: unknown }

@@ -14,13 +14,14 @@ import type { RunArgs } from "./main.ts";
 import { createModel } from "./model.ts";
 import type { AgentEvent } from "./protocol.ts";
 import { home } from "./registry.ts";
-import { logPath, newId, saveState, sockPath } from "./state.ts";
+import { attach } from "./attach.ts";
+import { isAlive, logPath, newId, saveState, sockPath } from "./state.ts";
 import type { AgentState } from "./state.ts";
 import { copyIn, copyOut } from "./sync.ts";
 import { createTools } from "./tools.ts";
 import { ensureWorker } from "./worker.ts";
 
-export const deps = { spawn };
+export const deps: { spawn: typeof spawn; attach: typeof attach; stdin: NodeJS.ReadableStream & { isTTY?: boolean }; pollMs: number } = { spawn, attach, stdin: process.stdin, pollMs: 100 };
 
 const dim = (s: string): string => `\x1b[2m${s}\x1b[0m`;
 
@@ -47,24 +48,51 @@ function newState(id: string, def: Definition, pid: number): AgentState {
   return { id, name: def.name, pid, status: "running", workdir: def.workdir!, sandbox: def.sandbox, started: new Date().toISOString(), log: logPath(id), sock: sockPath(id) };
 }
 
-export async function runCommand(args: RunArgs): Promise<number> {
-  const { def, task } = args;
-  const key = resolveKey(def, args.apiKey);
+export function spawnAgent(def: Definition, task: string | undefined, key: string | undefined, mode: "run" | "chat"): AgentState {
   const id = newId();
+  const state = newState(id, def, 0);
+  saveState(state);
+  fs.writeFileSync(runFile(id), JSON.stringify({ def, task, apiKey: key, mode }), { mode: 0o600 });
+  const binPath = fileURLToPath(new URL("../bin/maihem.js", import.meta.url));
+  const logFd = fs.openSync(state.log, "a");
+  const child = deps.spawn(process.execPath, [binPath, "__agent", id], { detached: true, stdio: ["ignore", logFd, logFd], env: process.env });
+  fs.closeSync(logFd);
+  child.unref();
+  const running = { ...state, pid: child.pid! };
+  saveState(running);
+  return running;
+}
+
+async function readStdin(): Promise<string | undefined> {
+  if (deps.stdin.isTTY) return undefined;
+  let text = "";
+  for await (const chunk of deps.stdin) text += chunk.toString();
+  return text.trim() || undefined;
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function launchCommand(args: RunArgs): Promise<number> {
+  const state = spawnAgent(args.def, args.task, resolveKey(args.def, args.apiKey), "chat");
+  if (args.detach) { console.log(state.id); return 0; }
+  for (let waited = 0; !fs.existsSync(state.sock); waited += deps.pollMs) {
+    if (!isAlive(state.pid) || waited >= 120_000) throw new Error(`agent exited, see maihem logs ${state.id}`);
+    await sleep(deps.pollMs);
+  }
+  await deps.attach(state.sock);
+  return 0;
+}
+
+export async function runCommand(args: RunArgs): Promise<number> {
+  const { def } = args;
+  const task = args.task ?? (await readStdin());
+  if (!task) throw new Error("run needs a task; use maihem launch for chat");
+  const key = resolveKey(def, args.apiKey);
   if (args.detach) {
-    const state = newState(id, def, 0);
-    saveState(state);
-    fs.writeFileSync(runFile(id), JSON.stringify({ def, task, apiKey: key }), { mode: 0o600 });
-    const binPath = fileURLToPath(new URL("../bin/maihem.js", import.meta.url));
-    const logFd = fs.openSync(state.log, "a");
-    const child = deps.spawn(process.execPath, [binPath, "__agent", id], { detached: true, stdio: ["ignore", logFd, logFd], env: process.env });
-    fs.closeSync(logFd);
-    child.unref();
-    saveState({ ...state, pid: child.pid! });
-    console.log(id);
+    console.log(spawnAgent(def, task, key, "run").id);
     return 0;
   }
-  if (!task) throw new Error("run needs a task (or use -d)");
+  const id = newId();
   const state = newState(id, def, process.pid);
   saveState(state);
   console.log(id);

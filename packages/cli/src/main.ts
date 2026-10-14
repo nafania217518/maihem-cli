@@ -6,7 +6,9 @@ import type { Definition } from "./definition.ts";
 import { listImages, loadImage, removeImage, saveImage } from "./registry.ts";
 import { isAlive, listStates, loadState, refresh, saveState } from "./state.ts";
 import { startWorker, stopWorker, workerStatus } from "./worker.ts";
-import { runCommand, runFile } from "./run.ts";
+import { launchCommand, runCommand, runFile } from "./run.ts";
+import { encode } from "./protocol.ts";
+import net from "node:net";
 import { attach } from "./attach.ts";
 import { serveAgent } from "./daemon.ts";
 import fs from "node:fs";
@@ -17,8 +19,9 @@ const USAGE = `usage:
   maihem inspect NAME
   maihem rmi NAME
   maihem run [NAME | -f FILE | --provider P --model M] [TASK] [-d] [--no-sandbox] [--workdir DIR] [--api-key KEY]
+  maihem launch [NAME | -f FILE | --provider P --model M] [FIRST_MESSAGE] [-d] [--no-sandbox] [--workdir DIR] [--api-key KEY]
   maihem ps
-  maihem stop ID
+  maihem stop [--discard] ID
   maihem attach ID
   maihem logs ID
   maihem worker start|stop|status`;
@@ -63,12 +66,19 @@ const pad = (rows: string[][]): string[] => {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function stop(id: string): Promise<void> {
+const sendStop = (sock: string, apply: boolean): Promise<boolean> => new Promise((resolve) => {
+  const c = net.connect(sock, () => c.end(encode({ type: "stop", apply }), () => resolve(true)));
+  c.on("error", () => resolve(false));
+});
+
+async function stop(id: string, discard: boolean): Promise<void> {
   const s = loadState(id);
-  try {
-    process.kill(s.pid, "SIGTERM");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
+  if (!(await sendStop(s.sock, !discard))) {
+    try {
+      process.kill(s.pid, "SIGTERM");
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
+    }
   }
   for (let i = 0; i < 50 && isAlive(s.pid); i++) await sleep(100);
   s.status = "exited";
@@ -111,10 +121,15 @@ export async function main(argv: string[]): Promise<number> {
         for (const l of pad(rows)) console.log(l);
         return 0;
       }
-      case "stop":
-        if (!rest[0]) break;
-        await stop(rest[0]);
+      case "stop": {
+        const discard = rest[0] === "--discard";
+        const id = discard ? rest[1] : rest[0];
+        if (!id) break;
+        await stop(id, discard);
         return 0;
+      }
+      case "launch":
+        return await launchCommand(resolveRunArgs(rest));
       case "run":
         return await runCommand(resolveRunArgs(rest));
       case "worker": {

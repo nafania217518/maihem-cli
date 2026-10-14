@@ -24,13 +24,14 @@ vi.mock("../src/backend-sandbox.ts", () => ({ createSandboxBackend: w.createSand
 vi.mock("../src/sync.ts", () => ({ copyIn: w.copyIn, copyOut: w.copyOut }));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function client(sock: string): { events: AgentEvent[]; send(text: string): void; wait(type: string, n?: number): Promise<void>; end(): void } {
+function client(sock: string): { events: AgentEvent[]; send(text: string): void; raw(m: object): void; wait(type: string, n?: number): Promise<void>; end(): void } {
   const events: AgentEvent[] = [];
   const c = net.connect(sock);
   c.on("data", lineSplitter((o) => events.push(o as AgentEvent)));
   return {
     events,
     send: (text) => c.write(encode({ type: "msg", text })),
+    raw: (m) => c.write(encode(m)),
     async wait(type, n = 1) { for (let i = 0; i < 100 && events.filter((e) => e.type === type).length < n; i++) await sleep(20); },
     end: () => c.end(),
   };
@@ -42,10 +43,10 @@ describe("daemon", () => {
   let out: string;
   let handle: Awaited<ReturnType<typeof serveAgent>> | undefined;
   const sock = () => path.join(os.tmpdir(), `maihem-test-${id}.sock`);
-  const setup = (over: { task?: string; sandbox?: boolean } = {}) => {
+  const setup = (over: { task?: string; sandbox?: boolean; mode?: "run" | "chat" } = {}) => {
     const def = { name: "bot", provider: "openai", model: "m", tools: ["read", "write", "edit", "list", "exec"], sandbox: over.sandbox ?? false, workdir: work, max_steps: 5 };
     saveState({ id, name: "bot", pid: 0, status: "running", workdir: work, sandbox: def.sandbox, started: "2026-01-01T00:00:00.000Z", log: logPath(id), sock: sock() });
-    fs.writeFileSync(runFile(id), JSON.stringify({ def, task: over.task, apiKey: "k" }));
+    fs.writeFileSync(runFile(id), JSON.stringify({ def, task: over.task, apiKey: "k", mode: over.mode ?? "chat" }));
   };
   beforeEach(() => {
     process.env.MAIHEM_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "mh-"));
@@ -136,6 +137,66 @@ describe("daemon", () => {
     process.emit("SIGTERM");
     await h.done;
     expect(fs.existsSync(h.sock)).toBe(false);
+  });
+
+  const sandboxed = () => { setup({ sandbox: true }); w.createSandboxBackend.mockReturnValue({ root: "/workspace", writeFile: vi.fn(async () => {}) }); };
+  it("hello reports readonly and workdir", async () => {
+    setup({ mode: "run" });
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    const c = client(handle.sock);
+    await c.wait("hello");
+    expect(c.events[0]).toMatchObject({ readonly: true, workdir: work });
+    c.end(); await handle.shutdown();
+    setup({ mode: "chat" });
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    const c2 = client(handle.sock);
+    await c2.wait("hello");
+    expect(c2.events[0]).toMatchObject({ readonly: false, workdir: work });
+    c2.end();
+  });
+  it("stop message with apply copies out", async () => {
+    sandboxed();
+    const h = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    const c = client(h.sock);
+    await c.wait("hello");
+    c.raw({ type: "stop", apply: true });
+    await h.done;
+    expect(w.copyOut).toHaveBeenCalledTimes(1);
+    expect(loadState(id).status).toBe("exited");
+  });
+  it("stop message without apply skips copy-out", async () => {
+    sandboxed();
+    const h = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    const c = client(h.sock);
+    await c.wait("hello");
+    c.raw({ type: "stop", apply: false });
+    await h.done;
+    expect(w.copyOut).not.toHaveBeenCalled();
+  });
+  it("run mode rejects msg from clients", async () => {
+    setup({ mode: "run" });
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    const c = client(handle.sock);
+    await c.wait("hello");
+    c.send("hi");
+    await c.wait("error");
+    expect(c.events.at(-1)).toEqual({ type: "error", message: "read-only: this agent runs one task" });
+    expect(c.events.some((e) => e.type === "user")).toBe(false);
+    c.end();
+  });
+  it("run mode stops itself after the task and applies changes", async () => {
+    sandboxed();
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...JSON.parse(fs.readFileSync(runFile(id), "utf8")), task: "go", mode: "run" }));
+    const h = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    await h.done;
+    expect(w.copyOut).toHaveBeenCalledTimes(1);
+    expect(loadState(id)).toMatchObject({ status: "exited", exitCode: 0 });
+  });
+  it("run mode exit code is 1 when the task fails", async () => {
+    setup({ mode: "run", task: "go" });
+    const h = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: async () => { throw new Error("boom"); } }) });
+    await h.done;
+    expect(loadState(id)).toMatchObject({ status: "exited", exitCode: 1 });
   });
 
   it("rejects instead of crashing when the socket cannot be opened", async () => {
