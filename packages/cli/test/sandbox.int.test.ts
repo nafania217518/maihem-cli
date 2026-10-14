@@ -18,6 +18,7 @@ const portFree = (port: number) =>
   });
 
 beforeAll(async () => {
+  if (!(await portFree(PORT))) throw new Error(`port ${PORT} is already in use; stop the process on it before running integration tests`);
   process.env.MAIHEM_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "mh-int-"));
   process.env.MAIHEM_WORKER_PORT = String(PORT);
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "mh-repo-"));

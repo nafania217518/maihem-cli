@@ -1,13 +1,21 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import net from "node:net";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
-const BASE = "http://127.0.0.1:8799";
+const PORT = 8797;
+const BASE = `http://127.0.0.1:${PORT}`;
 const ID = Date.now().toString(36);
 let child: ChildProcess;
 let log = "";
 
+const portFree = (port: number) =>
+  new Promise<boolean>((r) => {
+    const s = net.createServer().once("error", () => r(false)).listen(port, "127.0.0.1", () => s.close(() => r(true)));
+  });
+
 beforeAll(async () => {
-  child = spawn("npx", ["wrangler", "dev", "--port", "8799"], { cwd: new URL("..", import.meta.url).pathname, stdio: ["ignore", "pipe", "pipe"] });
+  if (!(await portFree(PORT))) throw new Error(`port ${PORT} is already in use; stop the process on it before running integration tests`);
+  child = spawn("npx", ["wrangler", "dev", "--port", String(PORT)], { cwd: new URL("..", import.meta.url).pathname, stdio: ["ignore", "pipe", "pipe"] });
   child.stdout!.on("data", (d) => (log += d));
   child.stderr!.on("data", (d) => (log += d));
   const deadline = Date.now() + 60_000;
@@ -20,12 +28,14 @@ beforeAll(async () => {
 }, 70_000);
 
 afterAll(async () => {
+  if (!child) return;
   child.kill("SIGTERM");
   await new Promise<void>((r) => {
     const t = setTimeout(() => (child.kill("SIGKILL"), r()), 3000);
     child.once("exit", () => (clearTimeout(t), r()));
   });
-});
+  expect(await portFree(PORT)).toBe(true);
+}, 20_000);
 
 it("PUT then GET round-trips bytes", async () => {
   const bytes = new Uint8Array([0, 1, 2, 255]);
