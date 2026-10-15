@@ -1,5 +1,5 @@
 name: local-helper
-provider: ollama
+provider: ollama   # maihem provider add --name ollama --kind ollama
 model: qwen3.5:9b-mlx
 system: |
   You are a helpful assistant working in a directory.

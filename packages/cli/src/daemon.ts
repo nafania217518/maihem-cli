@@ -2,6 +2,7 @@ import fs from "node:fs";
 import net from "node:net";
 import type { LanguageModel } from "ai";
 import type { Definition } from "./definition.ts";
+import type { Resolved } from "./providers.ts";
 import { encode, lineSplitter } from "./protocol.ts";
 import type { AgentEvent, ClientMessage } from "./protocol.ts";
 import { buildAgent, openBackend, printEvent, runFile } from "./run.ts";
@@ -12,10 +13,10 @@ export interface DaemonHandle { shutdown(apply?: boolean): Promise<void>; done: 
 
 export async function serveAgent(id: string, opts: { model?: LanguageModel } = {}): Promise<DaemonHandle> {
   const state = loadState(id);
-  const { def, task, apiKey, mode = "chat" } = JSON.parse(fs.readFileSync(runFile(id), "utf8")) as { def: Definition; task?: string; apiKey?: string; mode?: "run" | "chat" };
+  const { def, task, provider, mode = "chat" } = JSON.parse(fs.readFileSync(runFile(id), "utf8")) as { def: Definition; task?: string; provider: Resolved; mode?: "run" | "chat" };
   const readonly = mode === "run";
   const backend = await openBackend(def, id);
-  const agent = buildAgent(def, apiKey, backend, opts.model, readonly);
+  const agent = buildAgent(def, provider, backend, opts.model, readonly);
   const clients = new Set<net.Socket>();
   let busy = false;
   let exitCode = 0;

@@ -50,9 +50,9 @@ describe("daemon", () => {
   let handle: Awaited<ReturnType<typeof serveAgent>> | undefined;
   const sock = () => path.join(os.tmpdir(), `maihem-test-${id}.sock`);
   const setup = (over: { task?: string; sandbox?: boolean; mode?: "run" | "chat" } = {}) => {
-    const def = { name: "bot", provider: "openai", model: "m", tools: ["read", "write", "edit", "list", "exec"], sandbox: over.sandbox ?? false, workdir: work, max_steps: 5 };
+    const def = { name: "bot", provider: "p1", model: "m", tools: ["read", "write", "edit", "list", "exec"], sandbox: over.sandbox ?? false, workdir: work, max_steps: 5 };
     saveState({ id, name: "bot", pid: 0, status: "running", workdir: work, sandbox: def.sandbox, started: "2026-01-01T00:00:00.000Z", log: logPath(id), sock: sock() });
-    fs.writeFileSync(runFile(id), JSON.stringify({ def, task: over.task, apiKey: "k", mode: over.mode ?? "chat" }));
+    fs.writeFileSync(runFile(id), JSON.stringify({ def, task: over.task, provider: { name: "p1", kind: "openai", base_url: "http://snap", api_key: "k" }, mode: over.mode ?? "chat" }));
   };
   beforeEach(() => {
     process.env.MAIHEM_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "mh-"));
@@ -205,6 +205,17 @@ describe("daemon", () => {
     expect(loadState(id)).toMatchObject({ status: "exited", exitCode: 1 });
   });
 
+  it("daemon uses the provider snapshot even after the provider is removed", async () => {
+    setup();
+    fake.agent = () => ({ history: [], interrupt: () => {}, run: async () => {} });
+    handle = await serveAgent(id);
+    const model = (fake.opts.at(-1) as { model: { config: { baseURL: string } } }).model;
+    expect(model.config.baseURL).toBe("http://snap");
+    const c = client(handle.sock);
+    await c.wait("hello");
+    expect(c.events[0]).toMatchObject({ type: "hello", provider: "p1" });
+    c.end();
+  });
   it("rejects instead of crashing when the socket cannot be opened", async () => {
     setup();
     const bad = { ...loadState(id), sock: "/nonexistent-dir/" + "y".repeat(120) + ".sock" };

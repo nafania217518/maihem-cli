@@ -10,7 +10,7 @@ Multiple Agent In Harness Execution Manager. A CLI that runs AI agents the way D
 
 - Node 26 or newer. The CLI runs TypeScript directly, there is no build step.
 - `git` on PATH. Sandbox mode copies the working directory with `git ls-files`.
-- For `provider: ollama`, a running Ollama. For `openai` or `anthropic`, an API key.
+- For an `ollama` provider, a running Ollama. For `openai` or `anthropic`, an API key.
 
 ## Install
 
@@ -27,12 +27,16 @@ npm link -w @maihem/cli   # puts `maihem` on PATH
 maihem ps                       # stop running agents first: maihem stop <id>
 maihem worker stop              # stop the sandbox worker, if it runs
 npm uninstall -g @maihem/cli    # removes `maihem` from PATH
-rm -rf ~/.maihem                # optional: delete images, agent state and logs
+rm -rf ~/.maihem                # optional: delete images, providers, agent state and logs
 ```
 
 ## Quick start
 
 ```bash
+# register a provider once (see Providers)
+maihem provider add --name ollama --kind ollama
+maihem provider add --name anthropic --kind anthropic   # key from ANTHROPIC_API_KEY
+
 # one-shot task, sandboxed, in the current git repo
 maihem run -f examples/ollama.yaml "summarise README.md into SUMMARY.md"
 
@@ -50,7 +54,7 @@ maihem run -d -f examples/ollama.yaml "add tests for src/util.ts"
 maihem attach <id>        # read-only view while the task runs
 
 # chat with an agent; the first message is optional
-maihem launch -f examples/anthropic.yaml --api-key sk-ant-... "review the last commit"
+maihem launch -f examples/anthropic.yaml "review the last commit"
 maihem launch -d reviewer # start it without opening the chat
 maihem ps
 maihem --version
@@ -84,15 +88,13 @@ n discards the sandbox work.
 
 ```yaml
 name: reviewer
-provider: anthropic            # openai | anthropic | ollama
+provider: anthropic            # name of a registered provider
 model: claude-sonnet-5-5
-base_url: http://localhost:11434   # optional, for ollama or openai-compatible servers
 system: |
   You review code in the working directory.
 tools: [read, write, edit, list, exec]   # pick any subset
 sandbox: true                  # default true
 max_steps: 50                  # default 50
-api_key: sk-...                # optional
 reasoning: medium              # optional: none | minimal | low | medium | high | xhigh | max
 context: 64000                 # optional: token budget that MAIHEM tracks; not sent to the provider
 on_context_full: compact       # compact (default) | fail
@@ -117,20 +119,71 @@ Exit codes: 0 done, 1 error, 2 incomplete. The reason goes to stderr.
 Provider errors show the HTTP status and the number of attempts.
 MAIHEM retries rate limits, server errors and broken streams 2 times. A failed turn keeps its finished steps.
 
-API key precedence: `--api-key` flag, then `api_key` in the definition, then `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
+`provider` must name a registered provider, else the run fails with the `maihem provider add` command to fix it.
+Definitions hold no endpoint and no key. A definition with `base_url` or `api_key` fails with a hint to move them to a provider.
+
+## Providers
+
+A provider holds the connection settings. Definitions and images refer to it by name.
+
+```bash
+maihem provider add --name ollama --kind ollama
+maihem provider add --name lab --kind openai --base-url http://gpu-box:8000/v1 --api-key '$LAB_KEY'
+maihem provider add --name work --kind anthropic --api-key sk-ant-... --header X-Team=infra
+maihem provider update lab --header 'Authorization=Bearer ${LAB_TOKEN}'
+maihem provider ls
+maihem provider inspect work            # api_key and header values are masked
+maihem provider update lab --base-url http://gpu-box:9000/v1
+maihem provider update lab --unset base_url    # repeatable; base_url | api_key | headers
+maihem provider rm lab                  # refuses while an image uses it; -f forces
+```
+
+To read a value from the env at run time, put it in single quotes: `--api-key '$OPENAI_API_KEY'`. Without quotes, the shell inlines the value, and the key is stored in plain text.
+
+Load providers from a file. `apply` creates each provider, or replaces it fully if it exists.
+
+```yaml
+providers:
+  - name: ollama
+    kind: ollama
+  - name: lab
+    kind: openai
+    base_url: http://gpu-box:8000/v1
+    api_key: $LAB_KEY
+    headers:
+      X-Team: infra
+```
+
+```bash
+maihem provider apply -f providers.yaml
+```
+
+A plain `api_key` in the file works but prints a warning; use a reference like `$LAB_KEY` instead.
+
+| Setting | Meaning |
+|---|---|
+| `--kind` | `openai`, `anthropic` or `ollama`. Fixed after `add`. |
+| `--base-url` | Endpoint, e.g. an Ollama host or an OpenAI-compatible server |
+| `--api-key` | A key or a reference, stored in `~/.maihem/providers/<name>.yaml` (mode 0600) |
+| `--header K=V` | Extra HTTP header, repeatable |
+| References | `$VAR` or `${VAR}` in `--api-key` and `--header` values reads the env var at run time. `$$` is a literal `$`. |
+
+- Without `--api-key`, the key comes from `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Ollama needs no key.
+- An unset referenced env var fails the run and names the var.
+- Images store only the provider name. A `provider update` applies to every image at its next run. A running agent keeps the settings it started with.
 
 ## Registry
 
 ```bash
-maihem build -f examples/anthropic.yaml --api-key sk-ant-...   # store under its name
+maihem build -f examples/anthropic.yaml   # store under its name
 maihem images
-maihem inspect reviewer     # api_key is masked
+maihem inspect reviewer
 maihem run reviewer "review the last commit"
 maihem rmi reviewer
 ```
 
 `run` and `launch` accept three sources: `-f FILE`, a registry `NAME`, or inline flags
-`--provider P --model M [--system S] [--tools a,b] [--base-url U]`.
+`--provider NAME --model M [--system S] [--tools a,b]`, where NAME is a registered provider.
 
 ## Sandbox mode
 
@@ -141,7 +194,7 @@ maihem rmi reviewer
 
 ## State
 
-Everything lives under `~/.maihem` (override with `MAIHEM_HOME`): `images/`, `agents/<id>.json|.log|.sock`, `worker.json`, `worker.log`.
+Everything lives under `~/.maihem` (override with `MAIHEM_HOME`): `images/`, `providers/`, `agents/<id>.json|.log|.sock`, `worker.json`, `worker.log`.
 
 ## Development
 

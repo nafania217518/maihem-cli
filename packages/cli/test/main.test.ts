@@ -7,6 +7,7 @@ import { main, resolveRunArgs } from "../src/main.ts";
 import { saveImage } from "../src/registry.ts";
 import { saveState, loadState, logPath, sockPath } from "../src/state.ts";
 import { parseDefinition } from "../src/definition.ts";
+import { loadProvider, saveProvider } from "../src/providers.ts";
 import net from "node:net";
 import { deps, runFile } from "../src/run.ts";
 import { lineSplitter } from "../src/protocol.ts";
@@ -41,7 +42,7 @@ describe("main", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("build saves image and prints built", async () => {
-    expect(await main(["build", "-f", file, "--api-key", "sk-abcdef", "--name", "b"])).toBe(0);
+    expect(await main(["build", "-f", file, "--name", "b"])).toBe(0);
     expect(out()).toBe("built b");
     expect(fs.existsSync(path.join(home, "images", "b.yaml"))).toBe(true);
   });
@@ -51,11 +52,113 @@ describe("main", () => {
     expect(out()).toMatch(/NAME\s+PROVIDER\s+MODEL\s+SANDBOX\s+TOOLS/);
     expect(out()).toMatch(/a\s+openai\s+gpt\s+true\s+read,write,edit,list,exec/);
   });
-  it("inspect output has no raw key", async () => {
-    saveImage({ ...def("a"), api_key: "sk-abcdef" });
+  it("inspect prints the image definition", async () => {
+    saveImage(def("a"));
     expect(await main(["inspect", "a"])).toBe(0);
-    expect(out()).not.toContain("sk-abcdef");
-    expect(out()).toContain("****cdef");
+    expect(out()).toContain("provider: openai");
+  });
+  describe("provider", () => {
+    const add = (...a: string[]) => main(["provider", "add", ...a]);
+    it("provider add then ls and inspect (masked)", async () => {
+      expect(await add("--name", "op", "--kind", "openai", "--base-url", "http://x", "--api-key", "sk-abcdef", "--header", "X-A=b=c")).toBe(0);
+      expect(await add("--name", "an", "--kind", "anthropic", "--api-key", "$MY_KEY")).toBe(0);
+      expect(await add("--name", "ol", "--kind", "ollama")).toBe(0);
+      expect(await add("--name", "o2", "--kind", "openai")).toBe(0);
+      expect(out()).toBe("added op\nadded an\nadded ol\nadded o2");
+      expect(loadProvider("op").headers).toEqual({ "X-A": "b=c" });
+      log.mockClear();
+      expect(await main(["provider", "ls"])).toBe(0);
+      expect(out()).toMatch(/NAME\s+KIND\s+BASE_URL\s+KEY/);
+      expect(out()).toMatch(/an\s+anthropic\s+-\s+\$MY_KEY/);
+      expect(out()).toMatch(/o2\s+openai\s+-\s+env OPENAI_API_KEY/);
+      expect(out()).toMatch(/ol\s+ollama\s+-\s+none/);
+      expect(out()).toMatch(/op\s+openai\s+http:\/\/x\s+stored/);
+      log.mockClear();
+      expect(await main(["provider", "inspect", "op"])).toBe(0);
+      expect(out()).not.toContain("sk-abcdef");
+      expect(out()).toContain("****cdef");
+      expect(await add("--name", "x", "--kind", "openai", "--header", "bad")).toBe(1);
+      expect(err.mock.calls.at(-1)[0]).toBe("error: provider: --header needs K=V");
+      expect(await add("--kind", "openai")).toBe(1);
+      expect(await main(["provider", "bogus"])).toBe(1);
+    });
+    it("provider add refuses an existing name", async () => {
+      expect(await add("--name", "op", "--kind", "openai")).toBe(0);
+      expect(await add("--name", "op", "--kind", "ollama")).toBe(1);
+      expect(err.mock.calls[0][0]).toBe('error: provider "op" already exists; use maihem provider update op');
+      expect(loadProvider("op").kind).toBe("openai");
+    });
+    it("provider update patches, --unset clears, --header adds", async () => {
+      saveProvider({ name: "op", kind: "openai", base_url: "http://x", api_key: "k", headers: { A: "1" } });
+      expect(await main(["provider", "update", "op", "--base-url", "http://y", "--header", "B=2", "--header", "A=3"])).toBe(0);
+      expect(loadProvider("op")).toEqual({ name: "op", kind: "openai", base_url: "http://y", api_key: "k", headers: { A: "3", B: "2" } });
+      expect(await main(["provider", "update", "op", "--unset", "base_url", "--unset", "headers"])).toBe(0);
+      expect(loadProvider("op")).toEqual({ name: "op", kind: "openai", api_key: "k" });
+      expect(out()).toBe("updated op\nupdated op");
+      expect(await main(["provider", "update", "op", "--unset", "kind"])).toBe(1);
+      expect(await main(["provider", "update", "nope"])).toBe(1);
+      expect(await main(["provider", "update"])).toBe(1);
+    });
+    it("provider ls shows a reference as written", async () => {
+      saveProvider({ name: "a", kind: "openai", api_key: "$LAB_KEY" });
+      saveProvider({ name: "b", kind: "openai", api_key: "$$lit" });
+      expect(await main(["provider", "ls"])).toBe(0);
+      expect(out()).toMatch(/a\s+openai\s+-\s+\$LAB_KEY/);
+      expect(out()).toMatch(/b\s+openai\s+-\s+stored/);
+    });
+    it("provider rm refuses when an image uses it and -f forces", async () => {
+      saveProvider({ name: "op", kind: "openai" });
+      saveImage(def("a"));
+      saveImage(parseDefinition(JSON.stringify({ name: "b", provider: "op", model: "m" })));
+      saveImage(parseDefinition(JSON.stringify({ name: "c", provider: "op", model: "m" })));
+      expect(await main(["provider", "rm", "op"])).toBe(1);
+      expect(err.mock.calls[0][0]).toBe('error: provider "op" is used by images: b, c; use -f to remove it anyway');
+      expect(await main(["provider", "rm", "-f", "op"])).toBe(0);
+      expect(out()).toBe("removed op");
+      expect(() => loadProvider("op")).toThrow(/not found/);
+    });
+    it("provider rm of an unknown name fails", async () => {
+      expect(await main(["provider", "rm", "nope"])).toBe(1);
+      expect(err.mock.calls[0][0]).toMatch(/^error: provider "nope" not found/);
+      expect(await main(["provider", "rm"])).toBe(1);
+    });
+    const apply = (yaml: string) => { const f = path.join(home, "p.yaml"); fs.writeFileSync(f, yaml); return f; };
+    it("provider apply creates and replaces providers from a file", async () => {
+      saveProvider({ name: "lab", kind: "openai", base_url: "http://old", api_key: "$OLD" });
+      const f = apply("providers:\n  - name: o\n    kind: ollama\n  - name: lab\n    kind: anthropic\n    headers:\n      X: y\n");
+      expect(await main(["provider", "apply", "-f", f])).toBe(0);
+      expect(out()).toBe("created o\nreplaced lab");
+      expect(loadProvider("o")).toEqual({ name: "o", kind: "ollama" });
+      expect(loadProvider("lab")).toEqual({ name: "lab", kind: "anthropic", headers: { X: "y" } });
+    });
+    it("provider apply saves nothing when one entry is invalid", async () => {
+      const f = apply("providers:\n  - name: o\n    kind: ollama\n  - name: b\n    kind: x\n");
+      expect(await main(["provider", "apply", "--file", f])).toBe(1);
+      expect(() => loadProvider("o")).toThrow(/not found/);
+      expect(await main(["provider", "apply"])).toBe(1);
+    });
+    it("provider apply refuses other flags", async () => {
+      const f = apply("providers:\n  - name: o\n    kind: ollama\n");
+      expect(await main(["provider", "apply", "-f", f, "--name", "z"])).toBe(1);
+      expect(err.mock.calls[0][0]).toMatch(/Unknown option '--name'/);
+      expect(() => loadProvider("o")).toThrow(/not found/);
+    });
+    it("provider apply warns about a plain api_key", async () => {
+      const f = apply("providers:\n  - name: o\n    kind: openai\n    api_key: k\n");
+      expect(await main(["provider", "apply", "-f", f])).toBe(0);
+      expect(err.mock.calls[0][0]).toBe(`warning: api_key for "o" in ${f} is a plain key; use a reference like $OPENAI_API_KEY for files under version control`);
+    });
+    it("provider apply does not warn for an api_key reference", async () => {
+      const f = apply("providers:\n  - name: o\n    kind: openai\n    api_key: Bearer ${K}\n");
+      expect(await main(["provider", "apply", "-f", f])).toBe(0);
+      expect(err).not.toHaveBeenCalled();
+    });
+    it("build and run no longer accept --api-key", async () => {
+      expect(await main(["build", "-f", file, "--api-key", "k"])).toBe(1);
+      expect(await main(["run", "-f", file, "--api-key", "k", "x"])).toBe(1);
+      expect(await main(["launch", "-f", file, "--api-key", "k"])).toBe(1);
+      expect(await main(["run", "--provider", "op", "--model", "m", "--base-url", "http://x", "x"])).toBe(1);
+    });
   });
   it("rmi removes image", async () => {
     saveImage(def("a"));
@@ -116,7 +219,8 @@ describe("main", () => {
   });
   it("launch is dispatched with the run source forms", async () => {
     vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
-    saveImage({ ...def("a"), api_key: "k" });
+    saveProvider({ name: "openai", kind: "openai", api_key: "k" });
+    saveImage(def("a"));
     expect(await main(["launch", "a", "-d", "--no-sandbox", "hi"])).toBe(0);
     const id = out();
     expect(JSON.parse(fs.readFileSync(runFile(id), "utf8"))).toMatchObject({ task: "hi", mode: "chat", def: { name: "a", sandbox: false } });
@@ -131,7 +235,9 @@ describe("main", () => {
     expect(await main(["bogus"])).toBe(1);
     expect(err.mock.calls[0][0]).toMatch(/maihem launch \[NAME \| -f FILE \| --provider P --model M\] \[FIRST_MESSAGE\] \[-d\]/);
     expect(err.mock.calls[0][0]).toContain("maihem stop [--discard] ID");
-    expect(err.mock.calls[0][0]).toContain("[TASK] [-d] [--no-sandbox] [--workdir DIR] [--api-key KEY]");
+    expect(err.mock.calls[0][0]).toContain("[TASK] [-d] [--no-sandbox] [--workdir DIR]\n");
+    expect(err.mock.calls[0][0]).not.toContain("--api-key KEY]\n  maihem run");
+    expect(err.mock.calls[0][0]).toContain("maihem provider add --name NAME --kind openai|anthropic|ollama");
   });
   it("unknown command returns 1 with usage", async () => {
     expect(await main(["bogus"])).toBe(1);
@@ -172,11 +278,10 @@ describe("main", () => {
     expect(resolveRunArgs(["--name", "reg", "task2"]).task).toBe("task2");
   });
   it("resolveRunArgs: inline flags build a definition", () => {
-    const r = resolveRunArgs(["--provider", "ollama", "--model", "m", "-d", "--api-key", "k", "hello"]);
+    const r = resolveRunArgs(["--provider", "ollama", "--model", "m", "-d", "hello"]);
     expect(r.def).toMatchObject({ name: "inline", provider: "ollama", model: "m" });
     expect(r.task).toBe("hello");
     expect(r.detach).toBe(true);
-    expect(r.apiKey).toBe("k");
   });
   it("resolveRunArgs: task positional captured in both forms", () => {
     expect(resolveRunArgs(["-f", file, "t1"]).task).toBe("t1");

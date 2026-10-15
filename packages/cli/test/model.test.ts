@@ -5,24 +5,36 @@ import { streamText, RetryError } from "ai";
 import { createModel, retryDelays } from "../src/model.ts";
 import { parseDefinition } from "../src/definition.ts";
 
-const def = (provider: string, base_url?: string) => parseDefinition(JSON.stringify({ name: "a", provider, model: "m1", base_url }));
-const cfg = (m: unknown) => (m as { config: { baseURL?: string } }).config;
+import type { Kind, Resolved } from "../src/providers.ts";
+
+const D = parseDefinition(JSON.stringify({ name: "a", provider: "p", model: "m1" }));
+const prov = (kind: Kind, base_url?: string, more: Partial<Resolved> = {}): Resolved => ({ name: "p", kind, base_url, ...more });
+const cfg = (m: unknown) => (m as { config: { baseURL?: string; headers: () => Record<string, string> } }).config;
 
 describe("model", () => {
-  it("openai", () => {
-    const m = createModel(def("openai", "http://x"), "k") as { modelId: string; provider: string };
-    expect(m.modelId).toBe("m1");
-    expect(m.provider).toMatch(/^openai/);
-    expect(cfg(m).baseURL).toBe("http://x");
+  it("openai and anthropic get base_url, key and headers from the provider", () => {
+    for (const kind of ["openai", "anthropic"] as const) {
+      const m = createModel(D, prov(kind, "http://x", { api_key: "k1", headers: { "X-T": "v" } })) as { modelId: string; provider: string };
+      expect(m.modelId).toBe("m1");
+      expect(m.provider).toMatch(new RegExp(`^${kind}`));
+      expect(cfg(m).baseURL).toBe("http://x");
+      const h = cfg(m).headers();
+      expect(h["x-t"] ?? h["X-T"]).toBe("v");
+      expect(JSON.stringify(h)).toContain("k1");
+    }
   });
-  it("anthropic", () => {
-    const m = createModel(def("anthropic", "http://y"), "k") as { modelId: string; provider: string };
-    expect(m.modelId).toBe("m1");
-    expect(m.provider).toMatch(/^anthropic/);
-    expect(cfg(m).baseURL).toBe("http://y");
+  it("ollama client gets host and headers", async () => {
+    let seen: http.IncomingHttpHeaders = {};
+    const server = http.createServer((req, res) => { seen = req.headers; res.writeHead(404, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "nope" })); });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      await streamText({ model: createModel(D, prov("ollama", url, { headers: { "X-T": "v" } })), prompt: "x", onError: () => {} }).consumeStream();
+      expect(seen["x-t"]).toBe("v");
+    } finally { server.close(); }
   });
   it("ollama", () => {
-    const m = createModel(def("ollama"), undefined) as { modelId: string; provider: string };
+    const m = createModel(D, prov("ollama")) as { modelId: string; provider: string };
     expect(m.modelId).toBe("m1");
     expect(m.provider).toMatch(/^ollama/);
   });
@@ -40,7 +52,7 @@ describe("model", () => {
     try {
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       const ac = new AbortController();
-      const r = streamText({ model: createModel(def("ollama", url), undefined), prompt: "x", abortSignal: ac.signal, onError: () => {} });
+      const r = streamText({ model: createModel(D, prov("ollama", url)), prompt: "x", abortSignal: ac.signal, onError: () => {} });
       for await (const _ of r.textStream) break;
       ac.abort();
       const ok = await Promise.race([closedP.then(() => true), new Promise((r) => setTimeout(() => r(false), 1000))]);
@@ -60,7 +72,7 @@ describe("model", () => {
     };
     const fail = async (url: string) => {
       let err: unknown;
-      const r = streamText({ model: createModel(def("ollama", url), undefined), prompt: "x", onError: ({ error }) => { err = error; } });
+      const r = streamText({ model: createModel(D, prov("ollama", url)), prompt: "x", onError: ({ error }) => { err = error; } });
       await r.consumeStream();
       return err;
     };

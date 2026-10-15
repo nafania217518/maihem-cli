@@ -5,6 +5,7 @@ import { Ollama } from "ollama";
 import { RetryError, wrapLanguageModel } from "ai";
 import type { LanguageModel } from "ai";
 import type { Definition } from "./definition.ts";
+import type { Resolved } from "./providers.ts";
 
 export const retryDelays = [2000, 4000];
 
@@ -15,17 +16,17 @@ const retryable = (e: unknown): boolean => {
   return status === undefined ? e instanceof TypeError || /fetch failed|ECONNREFUSED/i.test(String(e)) : status >= 500;
 };
 
-export function createModel(def: Definition, apiKey: string | undefined): LanguageModel {
-  const baseURL = def.base_url;
-  switch (def.provider) {
+export function createModel(def: Definition, p: Resolved): LanguageModel {
+  const opts = { baseURL: p.base_url, apiKey: p.api_key, headers: p.headers };
+  switch (p.kind) {
     case "openai":
-      return createOpenAI({ apiKey, baseURL })(def.model);
+      return createOpenAI(opts)(def.model);
     case "anthropic":
-      return createAnthropic({ apiKey, baseURL })(def.model);
+      return createAnthropic(opts)(def.model);
     case "ollama":
     {
       // ai-sdk-ollama drops the abort signal; abort the client ourselves.
-      const client = new Ollama({ host: baseURL });
+      const client = new Ollama({ host: p.base_url, headers: p.headers });
       return wrapLanguageModel({
         model: createOllama({ client })(def.model),
         middleware: {

@@ -10,6 +10,7 @@ import { listStates } from "../src/state.ts";
 import { Readable } from "node:stream";
 import { deps, launchCommand, printEvent, runFile } from "../src/run.ts";
 import { resolveRunArgs } from "../src/main.ts";
+import { saveProvider } from "../src/providers.ts";
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
 const stream = (chunks: LanguageModelV4StreamPart[]) => ({ stream: simulateReadableStream({ chunks }) });
@@ -37,6 +38,7 @@ describe("run", () => {
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "mh-"));
     process.env.MAIHEM_HOME = home;
+    saveProvider({ name: "t", kind: "openai", api_key: "k" });
     work = fs.mkdtempSync(path.join(os.tmpdir(), "wd-"));
     out = ""; err = "";
     vi.spyOn(process.stdout, "write").mockImplementation((s) => { out += s; return true; });
@@ -48,7 +50,7 @@ describe("run", () => {
     vi.clearAllMocks();
   });
   afterEach(() => vi.restoreAllMocks());
-  const args = (...a: string[]) => ["run", "--provider", "openai", "--model", "m", "--api-key", "k", "--workdir", work, ...a];
+  const args = (...a: string[]) => ["run", "--provider", "t", "--model", "m", "--workdir", work, ...a];
 
   it("host run writes the file, prints the answer and exits state", async () => {
     expect(await main(args("--no-sandbox", "do it"))).toBe(0);
@@ -145,7 +147,7 @@ describe("run", () => {
     expect(argv).toEqual([expect.stringMatching(/bin\/maihem\.js$/), "__agent", s.id]);
     expect(opts).toMatchObject({ detached: true });
     expect(fs.statSync(runFile(s.id)).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(fs.readFileSync(runFile(s.id), "utf8"))).toMatchObject({ task: "x", apiKey: "k", mode: "run", def: { sandbox: false } });
+    expect(JSON.parse(fs.readFileSync(runFile(s.id), "utf8"))).toMatchObject({ task: "x", mode: "run", def: { sandbox: false } });
     expect(w.ensureWorker).not.toHaveBeenCalled();
   });
   const launch = (...a: string[]) => launchCommand(resolveRunArgs(args(...a).slice(1)));
@@ -181,8 +183,27 @@ describe("run", () => {
   });
   it("missing key returns 1", async () => {
     delete process.env.OPENAI_API_KEY;
-    expect(await main(["run", "--provider", "openai", "--model", "m", "--no-sandbox", "x"])).toBe(1);
-    expect(err).toMatch(/error: no API key for openai/);
+    saveProvider({ name: "nokey", kind: "openai" });
+    expect(await main(["run", "--provider", "nokey", "--model", "m", "--no-sandbox", "x"])).toBe(1);
+    expect(err).toMatch(/error: no API key for provider "nokey"/);
+  });
+  it("run with an unknown provider fails before spawning", async () => {
+    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    expect(await main(["run", "--provider", "nope", "--model", "m", "--no-sandbox", "-d", "x"])).toBe(1);
+    expect(err).toMatch(/provider "nope" not found/);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(listStates()).toEqual([]);
+    expect(await main(["launch", "--provider", "nope", "--model", "m", "--no-sandbox", "-d"])).toBe(1);
+    expect(await main(["run", "--provider", "nope", "--model", "m", "--no-sandbox", "x"])).toBe(1);
+    expect(listStates()).toEqual([]);
+  });
+  it("run.json holds the resolved provider", async () => {
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    expect(await main(args("-d", "--no-sandbox", "x"))).toBe(0);
+    const run = JSON.parse(fs.readFileSync(runFile(listStates()[0].id), "utf8"));
+    expect(run.provider).toEqual({ name: "t", kind: "openai", api_key: "k" });
+    expect(run.def.provider).toBe("t");
+    expect(run.apiKey).toBeUndefined();
   });
   it("printEvent shows the first output line of a tool result", () => {
     printEvent({ type: "tool-result", id: "c1", name: "x", ok: true, output: "line one " + "y".repeat(100) + "\nline two" });

@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LanguageModel } from "ai";
-import { resolveKey } from "./definition.ts";
 import type { Definition } from "./definition.ts";
 import type { Backend } from "./backend.ts";
 import { createAgent } from "./agent.ts";
@@ -12,6 +11,8 @@ import { createHostBackend } from "./backend-host.ts";
 import { createSandboxBackend } from "./backend-sandbox.ts";
 import type { RunArgs } from "./main.ts";
 import { createModel } from "./model.ts";
+import { resolveProvider } from "./providers.ts";
+import type { Resolved } from "./providers.ts";
 import type { AgentEvent } from "./protocol.ts";
 
 type DoneEvent = Extract<AgentEvent, { type: "done" }>;
@@ -43,8 +44,8 @@ export async function openBackend(def: Definition, id: string): Promise<Backend>
   return backend;
 }
 
-export function buildAgent(def: Definition, key: string | undefined, backend: Backend, model?: LanguageModel, oneShot = false): Agent {
-  return createAgent({ model: model ?? createModel(def, key), system: def.system, tools: createTools(backend, def.tools), maxSteps: def.max_steps,
+export function buildAgent(def: Definition, provider: Resolved, backend: Backend, model?: LanguageModel, oneShot = false): Agent {
+  return createAgent({ model: model ?? createModel(def, provider), system: def.system, tools: createTools(backend, def.tools), maxSteps: def.max_steps,
     reasoning: def.reasoning, context: def.context, onContextFull: def.on_context_full, compactAt: def.compact_at, oneShot });
 }
 
@@ -56,11 +57,11 @@ function newState(id: string, def: Definition, pid: number): AgentState {
   return { id, name: def.name, pid, status: "running", workdir: def.workdir!, sandbox: def.sandbox, started: new Date().toISOString(), log: logPath(id), sock: sockPath(id) };
 }
 
-export function spawnAgent(def: Definition, task: string | undefined, key: string | undefined, mode: "run" | "chat"): AgentState {
+export function spawnAgent(def: Definition, task: string | undefined, provider: Resolved, mode: "run" | "chat"): AgentState {
   const id = newId();
   const state = newState(id, def, 0);
   saveState(state);
-  fs.writeFileSync(runFile(id), JSON.stringify({ def, task, apiKey: key, mode }), { mode: 0o600 });
+  fs.writeFileSync(runFile(id), JSON.stringify({ def, task, provider, mode }), { mode: 0o600 });
   const binPath = fileURLToPath(new URL("../bin/maihem.js", import.meta.url));
   const logFd = fs.openSync(state.log, "a");
   const child = deps.spawn(process.execPath, [binPath, "__agent", id], { detached: true, stdio: ["ignore", logFd, logFd], env: process.env });
@@ -81,7 +82,7 @@ async function readStdin(): Promise<string | undefined> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function launchCommand(args: RunArgs): Promise<number> {
-  const state = spawnAgent(args.def, args.task, resolveKey(args.def, args.apiKey), "chat");
+  const state = spawnAgent(args.def, args.task, resolveProvider(args.def.provider), "chat");
   if (args.detach) { console.log(state.id); return 0; }
   for (let waited = 0; !fs.existsSync(state.sock); waited += deps.pollMs) {
     if (!isAlive(state.pid) || waited >= 120_000) throw new Error(`agent exited, see maihem logs ${state.id}`);
@@ -95,9 +96,9 @@ export async function runCommand(args: RunArgs): Promise<number> {
   const { def } = args;
   const task = args.task ?? (await readStdin());
   if (!task) throw new Error("run needs a task; use maihem launch for chat");
-  const key = resolveKey(def, args.apiKey);
+  const provider = resolveProvider(def.provider);
   if (args.detach) {
-    console.log(spawnAgent(def, task, key, "run").id);
+    console.log(spawnAgent(def, task, provider, "run").id);
     return 0;
   }
   const id = newId();
@@ -105,7 +106,7 @@ export async function runCommand(args: RunArgs): Promise<number> {
   saveState(state);
   console.error(id);
   const backend = await openBackend(def, id);
-  const agent = buildAgent(def, key, backend, undefined, true);
+  const agent = buildAgent(def, provider, backend, undefined, true);
   let exitCode = 0;
   let done: DoneEvent | undefined;
   const live = deps.stdout.isTTY;
