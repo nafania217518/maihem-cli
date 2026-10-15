@@ -9,7 +9,7 @@ export type AgentEvent =
   | Stamped<{ type: "user"; text: string }>
   | Stamped<{ type: "text"; delta: string }>
   | Stamped<{ type: "thinking"; delta: string }>
-  | Stamped<{ type: "context"; used: number; budget?: number }>
+  | Stamped<{ type: "context"; used: number; budget?: number; tps?: number }>
   | Stamped<{ type: "compacted"; before: number; after: number }>
   | Stamped<{ type: "step" }>
   | Stamped<{ type: "tool"; id: string; name: string; input: unknown }>
@@ -20,6 +20,7 @@ export type AgentEvent =
       interrupted?: boolean;
       incomplete?: Incomplete;
       steps?: number;
+      tps?: number;
       rateLimits?: Record<string, string>;
     }>
   | Stamped<{ type: "error"; message: string; status?: number; attempts?: number }>;
@@ -33,7 +34,7 @@ export function lineSplitter(onLine: (obj: unknown) => void): (chunk: string | B
   return (chunk) => {
     buf += chunk.toString();
     const lines = buf.split("\n");
-    buf = lines.pop() ?? "";
+    buf = lines.pop()!; // split always returns at least one element
     for (const line of lines) {
       if (!line.trim()) continue;
       try {

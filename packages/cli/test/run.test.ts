@@ -44,6 +44,7 @@ describe("run", () => {
     vi.spyOn(console, "log").mockImplementation((s) => { out += s + "\n"; });
     vi.spyOn(console, "error").mockImplementation((s) => { err += s + "\n"; });
     modelImpl = () => new MockLanguageModelV4({ doStream: steps() });
+    deps.stdout = { write: (s: string) => { out += s; return true; } } as never;
     vi.clearAllMocks();
   });
   afterEach(() => vi.restoreAllMocks());
@@ -52,11 +53,45 @@ describe("run", () => {
   it("host run writes the file, prints the answer and exits state", async () => {
     expect(await main(args("--no-sandbox", "do it"))).toBe(0);
     expect(fs.readFileSync(path.join(work, "out.txt"), "utf8")).toBe("data");
-    expect(out).toMatch(/^[0-9a-f]{12}\nanswer\n$/);
+    expect(out).toBe("answer\n");
     expect(err).toContain("⚙ write");
     expect(err).toContain("✓ wrote out.txt");
     const [s] = listStates();
     expect(s).toMatchObject({ status: "exited", exitCode: 0, sandbox: false, workdir: work });
+  });
+  it("foreground run prints the agent id to stderr, not stdout", async () => {
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    const [s] = listStates();
+    expect(err).toContain(`${s.id}\n`);
+    expect(out).not.toContain(s.id);
+  });
+  it("piped run writes only the final step's text to stdout", async () => {
+    modelImpl = () => new MockLanguageModelV4({ doStream: [
+      stream([{ type: "text-start", id: "a" }, { type: "text-delta", id: "a", delta: "Let me look." }, { type: "text-end", id: "a" }, { type: "tool-call", toolCallId: "c1", toolName: "write", input: JSON.stringify({ path: "out.txt", content: "data" }) }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }]),
+      stream([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "hellow" }, { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "stop", raw: "" }, usage }]),
+    ] });
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    expect(out).toBe("hellow\n");
+    expect(err).toContain("⚙ write");
+  });
+  it("terminal run streams all text to stdout", async () => {
+    deps.stdout = { isTTY: true, write: (s: string) => { out += s; return true; } } as never;
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    expect(out).toBe("answer\n");
+  });
+  it("piped run writes nothing to stdout on error", async () => {
+    modelImpl = () => new MockLanguageModelV4({ doStream: async () => { throw new Error("boom"); } });
+    expect(await main(args("--no-sandbox", "do it"))).toBe(1);
+    expect(out).toBe("");
+  });
+  it("piped run with an incomplete turn writes the final step text and returns 2", async () => {
+    fake.agent = () => ({ history: [], interrupt: () => {}, run: async (_t: string, emit: (e: unknown) => void) => {
+      for (const e of [{ type: "step" }, { type: "text", delta: "interim" }, { type: "step" }, { type: "text", delta: "partial" }, { type: "done", incomplete: "step limit", steps: 2 }]) emit(e);
+    } });
+    try {
+      expect(await main(args("--no-sandbox", "do it"))).toBe(2);
+    } finally { fake.agent = undefined; }
+    expect(out).toBe("partial\n");
   });
   it("sandbox run calls ensureWorker, copyIn, copyOut in order", async () => {
     const backend = { root: "/workspace", readFile: vi.fn(), writeFile: vi.fn(async () => {}), exec: vi.fn() };

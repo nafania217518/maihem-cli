@@ -14,6 +14,7 @@ import net from "node:net";
 import { attach } from "./attach.ts";
 import { serveAgent } from "./daemon.ts";
 import fs from "node:fs";
+import { VERSION } from "./version.ts";
 
 const USAGE = `usage:
   maihem build -f FILE [--api-key KEY] [--name NAME]
@@ -27,7 +28,8 @@ const USAGE = `usage:
   maihem attach ID
   maihem logs ID
   maihem prune [-f]
-  maihem worker start|stop|status`;
+  maihem worker start|stop|status
+  maihem --version`;
 
 const RUN_OPTIONS = {
   detach: { type: "boolean", short: "d", default: false },
@@ -113,6 +115,10 @@ export async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
   try {
     switch (cmd) {
+      case "--version":
+      case "-v":
+        console.log(VERSION);
+        return 0;
       case "build": {
         const { values: v } = parseArgs({ args: rest, options: { file: { type: "string", short: "f" }, "api-key": { type: "string" }, name: { type: "string" } } });
         if (!v.file) break;

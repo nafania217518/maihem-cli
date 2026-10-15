@@ -121,6 +121,12 @@ describe("main", () => {
     const id = out();
     expect(JSON.parse(fs.readFileSync(runFile(id), "utf8"))).toMatchObject({ task: "hi", mode: "chat", def: { name: "a", sandbox: false } });
   });
+  it("--version and -v print the version", async () => {
+    const { version } = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(await main(["--version"])).toBe(0);
+    expect(await main(["-v"])).toBe(0);
+    expect(out()).toBe(`${version}\n${version}`);
+  });
   it("usage lists launch", async () => {
     expect(await main(["bogus"])).toBe(1);
     expect(err.mock.calls[0][0]).toMatch(/maihem launch \[NAME \| -f FILE \| --provider P --model M\] \[FIRST_MESSAGE\] \[-d\]/);

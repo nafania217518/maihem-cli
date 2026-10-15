@@ -258,4 +258,33 @@ describe("agent", () => {
     expect(events.some((e) => e.type === "error")).toBe(false);
     expect(events.at(-1)).toMatchObject({ type: "done" });
   });
+  it("done reports generation speed over the turn's steps", async () => {
+    const slow = { stream: simulateReadableStream<LanguageModelV4StreamPart>({ chunks: [{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "a" }, { type: "text-delta", id: "t", delta: "b" }, { type: "text-end", id: "t" }, finish("stop")], chunkDelayInMs: 10 }) };
+    const model = new MockLanguageModelV4({ doStream: [slow] });
+    const events: AgentEvent[] = [];
+    await createAgent({ model, system: "s", tools, maxSteps: 5 }).run("t", (e) => events.push(e));
+    const done = events.at(-1) as { tps?: number };
+    expect(done.tps).toBeGreaterThan(0);
+  });
+  it("tps is omitted when no generation time is measured", async () => {
+    const model = new MockLanguageModelV4({ doStream: [stream([finish("stop")])] });
+    const events: AgentEvent[] = [];
+    await createAgent({ model, system: "s", tools, maxSteps: 5 }).run("t", (e) => events.push(e));
+    expect(events.at(-1)).not.toHaveProperty("tps");
+  });
+  it("context event carries the step's generation speed", async () => {
+    const slow = { stream: simulateReadableStream<LanguageModelV4StreamPart>({ chunks: [{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "a" }, { type: "text-delta", id: "t", delta: "b" }, { type: "text-end", id: "t" }, finish("stop")], chunkDelayInMs: 10 }) };
+    const model = new MockLanguageModelV4({ doStream: [slow] });
+    const events: AgentEvent[] = [];
+    await createAgent({ model, system: "s", tools, maxSteps: 5 }).run("t", (e) => events.push(e));
+    const ctx = events.find((e) => e.type === "context") as { tps?: number };
+    expect(ctx.tps).toBeGreaterThan(0);
+  });
+  it("thinking text does not change the context used", async () => {
+    const model = new MockLanguageModelV4({ doStream: [stream([{ type: "reasoning-start", id: "r" }, { type: "reasoning-delta", id: "r", delta: "x".repeat(40000) }, { type: "reasoning-end", id: "r" }, finish("stop", use(20, 7))])] });
+    const events: AgentEvent[] = [];
+    await createAgent({ model, system: "s", tools, maxSteps: 5, context: 1000 }).run("t", (e) => events.push(e));
+    expect(events.filter((e) => e.type === "context")).toEqual([expect.objectContaining({ used: 27 })]);
+    expect(events.some((e) => e.type === "compacted")).toBe(false);
+  });
 });

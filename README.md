@@ -19,6 +19,17 @@ npm install
 npm link -w @maihem/cli   # puts `maihem` on PATH
 ```
 
+`npm link` creates a symlink to this checkout. There is no build step, so `git pull` or any local change takes effect at once.
+
+## Uninstall
+
+```bash
+maihem ps                       # stop running agents first: maihem stop <id>
+maihem worker stop              # stop the sandbox worker, if it runs
+npm uninstall -g @maihem/cli    # removes `maihem` from PATH
+rm -rf ~/.maihem                # optional: delete images, agent state and logs
+```
+
 ## Quick start
 
 ```bash
@@ -31,6 +42,9 @@ maihem run --no-sandbox -f examples/ollama.yaml "run the tests and fix the faili
 # task from a pipe
 cat task.md | maihem run -f examples/ollama.yaml
 
+# chain agents: a piped run writes only its final answer to stdout
+echo "write a haiku about pipes" | maihem run -f examples/ollama.yaml | maihem run -f examples/ollama.yaml
+
 # task in the background; the agent stops itself when the task ends
 maihem run -d -f examples/ollama.yaml "add tests for src/util.ts"
 maihem attach <id>        # read-only view while the task runs
@@ -39,10 +53,13 @@ maihem attach <id>        # read-only view while the task runs
 maihem launch -f examples/anthropic.yaml --api-key sk-ant-... "review the last commit"
 maihem launch -d reviewer # start it without opening the chat
 maihem ps
+maihem --version
 maihem attach <id>
 maihem logs <id>
 maihem stop <id>          # copies sandbox work back; --discard skips that
 ```
+
+In a pipe, `run` writes only the final answer to stdout. The agent ID, tool lines and notices go to stderr.
 
 The chat is full screen. The header shows the agent, the footer shows key hints, and `?` lists all keys.
 
@@ -55,7 +72,7 @@ The chat is full screen. The header shows the agent, the footer shows key hints,
 | Ctrl+O | switch between the simplified and the detailed view |
 | PgUp / PgDn, Shift+↑ / ↓, Home / End | scroll the chat |
 
-The detailed view adds full tool input and output, model thinking, timestamps, model steps, tokens and time per turn, and rate limits.
+The detailed view adds full tool input and output, model thinking, timestamps, model steps, tokens, time and generation speed (tok/s) per turn, and rate limits.
 The footer shows the context gauge, for example `ctx 12.3k/64k · 19%`. It turns yellow at 70% and red at 90%.
 
 Leaving the chat asks `Stop agent <id>? [y/N]`.

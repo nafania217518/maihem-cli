@@ -122,6 +122,12 @@ describe("renderBlock", () => {
     expect(txt(renderBlock({ kind: "error", message: "m" }, D))).toEqual(["● Error: m"]);
   });
 
+  it("detailed turn-end shows tokens per second after the duration", () => {
+    const b = { kind: "turn-end" as const, usage: { inputTokens: 12100, outputTokens: 340 }, ms: 12400, tps: 42 };
+    expect(txt(renderBlock(b, D))).toEqual(["  ⎿  ↑ 12.1k ↓ 340 tokens · 12.4s · 42 tok/s"]);
+    expect(renderBlock(b, S)).toEqual([]);
+    expect(toBlocks([{ type: "user", text: "q", at: 0 }, { type: "done", tps: 7, at: 1000 }]).at(-1)).toMatchObject({ tps: 7 });
+  });
   it("detailed view shows step dividers and turn tokens with duration", () => {
     const step = txt(renderBlock({ kind: "step", n: 2 }, D))[0];
     expect(step.startsWith("── step 2 ──")).toBe(true);

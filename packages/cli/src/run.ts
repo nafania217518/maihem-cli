@@ -23,7 +23,7 @@ import { copyIn, copyOut } from "./sync.ts";
 import { createTools } from "./tools.ts";
 import { ensureWorker } from "./worker.ts";
 
-export const deps: { spawn: typeof spawn; attach: typeof attach; stdin: NodeJS.ReadableStream & { isTTY?: boolean }; pollMs: number } = { spawn, attach, stdin: process.stdin, pollMs: 100 };
+export const deps: { spawn: typeof spawn; attach: typeof attach; stdin: NodeJS.ReadableStream & { isTTY?: boolean }; stdout: NodeJS.WritableStream & { isTTY?: boolean }; pollMs: number } = { spawn, attach, stdin: process.stdin, stdout: process.stdout, pollMs: 100 };
 
 const dim = (s: string): string => `\x1b[2m${s}\x1b[0m`;
 
@@ -103,14 +103,22 @@ export async function runCommand(args: RunArgs): Promise<number> {
   const id = newId();
   const state = newState(id, def, process.pid);
   saveState(state);
-  console.log(id);
+  console.error(id);
   const backend = await openBackend(def, id);
   const agent = buildAgent(def, key, backend, undefined, true);
   let exitCode = 0;
   let done: DoneEvent | undefined;
+  const live = deps.stdout.isTTY;
+  let final = ""; // piped: only the last step's text goes to stdout
   try {
-    await agent.run(task, (e) => { printEvent(e); if (e.type === "done" && e.incomplete) done = e; });
-    process.stdout.write("\n");
+    await agent.run(task, (e) => {
+      if (e.type === "step") final = "";
+      if (!live && e.type === "text") final += e.delta;
+      else printEvent(e);
+      if (e.type === "done" && e.incomplete) done = e;
+    });
+    if (live) deps.stdout.write("\n");
+    else if (final) deps.stdout.write(final + "\n");
   } catch (e) {
     console.error(`error: ${(e as Error).message}`);
     exitCode = 1;

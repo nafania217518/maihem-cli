@@ -1,6 +1,6 @@
 {
   "name": "@maihem/cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "bin": {
     "maihem": "./bin/maihem.js"
@@ -8,7 +8,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.79",
     "@ai-sdk/openai": "4.0.93",
-    "@maihem/worker": "0.1.0",
+    "@maihem/worker": "0.1.1",
     "ai": "7.0.140",
     "ai-sdk-ollama": "4.5.0",
     "chalk": "6.0.1",

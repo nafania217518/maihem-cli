@@ -48,6 +48,7 @@ export function createAgent(opts: AgentOptions): Agent {
       if (fail && budget && used >= budget) { commit(); emit({ type: "done", incomplete: "context full" }); return ""; }
       let text = "";
       const usage = { inputTokens: 0, outputTokens: 0 };
+      const gen = { tokens: 0, ms: 0 };
       let count = 0, wrap = false, full = false;
       let last: { finishReason: string; rawFinishReason?: string; response: { headers?: Record<string, string> } } | undefined;
       const pending: AgentEvent[] = [];
@@ -85,7 +86,10 @@ export function createAgent(opts: AgentOptions): Agent {
           else if (part.type === "finish-step") {
             count++; last = part;
             usage.inputTokens += part.usage.inputTokens ?? 0; usage.outputTokens += part.usage.outputTokens ?? 0;
-            emit({ type: "context", used: total(part.usage), budget });
+            const p = part.performance;
+            const out = part.usage.outputTokens ?? 0, ms = p?.timeToFirstOutputMs !== undefined ? p.responseTimeMs - p.timeToFirstOutputMs : 0;
+            if (p?.timeToFirstOutputMs !== undefined) { gen.tokens += out; gen.ms += ms; }
+            emit({ type: "context", used: total(part.usage), budget, ...(ms > 0 && { tps: Math.round(1000 * out / ms) }) });
           }
           else if (part.type === "tool-call") emit({ type: "tool", id: part.toolCallId, name: part.toolName, input: part.input });
           else if (part.type === "tool-result") emit({ type: "tool-result", id: part.toolCallId, name: part.toolName, ok: true, output: String(part.output).slice(0, 16000) });
@@ -135,7 +139,7 @@ export function createAgent(opts: AgentOptions): Agent {
         : fr === "content-filter" ? "content filter" : undefined;
       const headers = last?.response.headers ?? {};
       const rateLimits = Object.fromEntries(RATE_KEYS.filter((k) => headers[k] !== undefined).map((k) => [k, headers[k]]));
-      emit({ type: "done", usage, steps, ...(incomplete && { incomplete }), ...(Object.keys(rateLimits).length && { rateLimits }) });
+      emit({ type: "done", usage, steps, ...(gen.ms > 0 && { tps: Math.round(1000 * gen.tokens / gen.ms) }), ...(incomplete && { incomplete }), ...(Object.keys(rateLimits).length && { rateLimits }) });
       return text;
     },
   };

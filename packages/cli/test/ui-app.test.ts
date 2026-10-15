@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import os from "node:os";
 import React from "react";
 import { render } from "ink-testing-library";
@@ -50,7 +50,7 @@ describe("App", () => {
     const f = lastFrame() ?? "";
     expect(f).toContain("▗▙   ▟▖");
     expect(f).toContain("▐█▀█▀█▌");
-    expect(f).toContain("MAIHEM v0.1.0 · bot");
+    expect(f).toContain("MAIHEM v0.1.1 · bot");
     expect(f).toContain("p/m1 · sandbox");
     expect(f).toContain("~/proj · abc");
     await emit({ ...hello, sandbox: false, readonly: true } as AgentEvent);
@@ -209,6 +209,69 @@ describe("App", () => {
     expect(lastFrame()).not.toBe(a);
     await emit({ type: "done" });
     expect(lastFrame()).not.toMatch(/tokens\)/);
+  });
+
+  it("spinner token count includes thinking", async () => {
+    const { lastFrame, emit } = setup();
+    await emit(hello, { type: "user", text: "q" }, { type: "thinking", delta: "x".repeat(4000) }, { type: "text", delta: "x".repeat(4000) });
+    expect(lastFrame()).toContain("↓ 2k tokens");
+  });
+
+  describe("spinner speed", () => {
+    let now = 0;
+    const at = (ms: number) => { now = ms; vi.setSystemTime(ms); };
+    const wait = () => new Promise((r) => setTimeout(r, 200)); // > one 120 ms spinner tick
+    beforeEach(() => { vi.useFakeTimers({ toFake: ["Date"] }); at(1_000_000); });
+    afterEach(() => vi.useRealTimers());
+
+    it("spinner shows the exact speed when a step ends", async () => {
+      const { lastFrame, emit } = setup();
+      await emit(hello, { type: "user", text: "q" }, { type: "context", used: 10, tps: 42 });
+      expect(lastFrame()).toContain("tokens · 42 tok/s)");
+    });
+    it("spinner shows a live speed estimate while a step streams", async () => {
+      const { lastFrame, emit } = setup();
+      await emit(hello, { type: "user", text: "q" }, { type: "step" }, { type: "text", delta: "x" });
+      at(now + 2000);
+      await emit({ type: "text", delta: "x".repeat(399) });
+      await wait();
+      expect(lastFrame()).toContain("· 50 tok/s)");
+    });
+    it("spinner speed refreshes at most once per second", async () => {
+      const { lastFrame, emit } = setup();
+      await emit(hello, { type: "user", text: "q" }, { type: "step" }, { type: "text", delta: "x" });
+      await emit({ type: "context", used: 10, tps: 42 });
+      at(now + 900); // 1 s of streaming, but only 900 ms after the exact value
+      await emit({ type: "text", delta: "x".repeat(399) });
+      at(now + 50);
+      await wait();
+      expect(lastFrame()).toContain("· 42 tok/s)");
+      at(now + 1000);
+      await wait();
+      expect(lastFrame()).toMatch(/· \d+ tok\/s\)/);
+      expect(lastFrame()).not.toContain("· 42 tok/s)");
+    });
+    it("spinner waits for 1 s of streaming before the first estimate", async () => {
+      const { lastFrame, emit } = setup();
+      await emit(hello, { type: "user", text: "q" }, { type: "step" }, { type: "text", delta: "x" });
+      at(now + 500);
+      await emit({ type: "text", delta: "x".repeat(399) });
+      await wait();
+      expect(lastFrame()).not.toContain("tok/s");
+    });
+    it("spinner shows no speed before any value exists", async () => {
+      const { lastFrame, emit } = setup();
+      await emit(hello, { type: "user", text: "q" }, { type: "context", used: 10, tps: 42 }, { type: "done" }, { type: "user", text: "r" });
+      await wait();
+      expect(lastFrame()).toContain("tokens)");
+      expect(lastFrame()).not.toContain("tok/s");
+    });
+  });
+
+  it("thinking does not change the context gauge", async () => {
+    const { lastFrame, emit } = setup();
+    await emit(hello, { type: "user", text: "q" }, { type: "context", used: 12300, budget: 64000 }, { type: "thinking", delta: "x".repeat(40000) });
+    expect(lastFrame()).toContain("ctx 12.3k/64k · 19%");
   });
 
   it("shows connecting before hello", () => {

@@ -1,17 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { readFileSync } from "node:fs";
 import os from "node:os";
 import { Box, Text, useInput, useWindowSize } from "ink";
 import TextInput from "ink-text-input";
 import stringWidth from "string-width";
 import type { AgentEvent } from "../protocol.ts";
+import { VERSION } from "../version.ts";
 import { k, renderTranscript, theme, toBlocks } from "./transcript.ts";
 
 const h = React.createElement;
 const FRAMES = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
 const VERBS = ["Scheming", "Plotting", "Wreaking", "Brewing", "Conniving", "Tinkering"];
 const MASCOT = "▗▙   ▟▖\n▐█▀█▀█▌\n ▀▘ ▝▀ ";
-const VERSION: string = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
 const HELP = [
   ["enter  send", "esc  interrupt / leave", "ctrl+c  stop agent", "ctrl+o  simplified / detailed", "ctrl+d  detach"],
   ["pgup/pgdn  scroll a page", "shift+↑/↓  scroll a line", "home/end  top / bottom", "?  close help"],
@@ -43,7 +42,7 @@ export function App(props: AppProps): React.ReactElement {
   const { columns, rows } = props.size ?? win;
   const [hello, setHello] = useState<Hello | null>(null);
   const [events, setEvents] = useState<AgentEvent[]>([]);
-  const [turn, setTurn] = useState<{ start: number; verb: string; chars: number } | null>(null);
+  const [turn, setTurn] = useState<{ start: number; verb: string; chars: number; stepChars: number; stepAt?: number; tps?: number; tpsAt: number } | null>(null);
   const [frame, setFrame] = useState(0);
   const [input, setInput] = useState("");
   const [ask, setAsk] = useState<null | "stop" | "apply" | "stopping">(null);
@@ -63,9 +62,13 @@ export function App(props: AppProps): React.ReactElement {
         return e.history.forEach(on);
       }
       setEvents((es) => [...es, e]);
-      if (e.type === "user") setTurn({ start: Date.now(), verb: VERBS[Math.floor(Math.random() * VERBS.length)], chars: 0 });
-      else if (e.type === "text") setTurn((t) => t && { ...t, chars: t.chars + e.delta.length });
-      else if (e.type === "context") setCtx({ used: e.used, budget: e.budget });
+      if (e.type === "user") setTurn({ start: Date.now(), verb: VERBS[Math.floor(Math.random() * VERBS.length)], chars: 0, stepChars: 0, tpsAt: -Infinity });
+      else if (e.type === "text" || e.type === "thinking") setTurn((t) => t && { ...t, chars: t.chars + e.delta.length, stepChars: t.stepChars + e.delta.length, stepAt: t.stepAt ?? Date.now() });
+      else if (e.type === "step") setTurn((t) => t && { ...t, stepChars: 0, stepAt: undefined });
+      else if (e.type === "context") {
+        setCtx({ used: e.used, budget: e.budget });
+        if (e.tps !== undefined) setTurn((t) => t && { ...t, tps: e.tps, tpsAt: Date.now() });
+      }
       else if (e.type === "compacted") setCtx((c) => ({ ...c, used: e.after }));
       else if (e.type === "done" || e.type === "error") setTurn(null);
     };
@@ -75,7 +78,13 @@ export function App(props: AppProps): React.ReactElement {
   const busy = turn !== null;
   useEffect(() => {
     if (!busy) return;
-    const t = setInterval(() => setFrame((f) => (f + 1) % FRAMES.length), 120);
+    const t = setInterval(() => {
+      setFrame((f) => (f + 1) % FRAMES.length);
+      setTurn((t) => {
+        const now = Date.now(), secs = t?.stepAt === undefined ? 0 : (now - t.stepAt) / 1000;
+        return t && now - t.tpsAt >= 1000 && secs >= 1 ? { ...t, tps: Math.round(t.stepChars / 4 / secs), tpsAt: now } : t;
+      });
+    }, 120);
     return () => clearInterval(t);
   }, [busy]);
 
@@ -161,7 +170,7 @@ export function App(props: AppProps): React.ReactElement {
   const view = lines.slice(Math.max(0, lines.length - height - off), lines.length - off);
   const secs = turn ? Math.floor((Date.now() - turn.start) / 1000) : 0;
   const spinner = turn
-    ? h(Text, null, h(Text, { color: theme.accent }, `${FRAMES[frame]} ${turn.verb}…`), h(Text, { dimColor: true }, ` (${secs}s · ↓ ${k(Math.round(turn.chars / 4))} tokens)`))
+    ? h(Text, null, h(Text, { color: theme.accent }, `${FRAMES[frame]} ${turn.verb}…`), h(Text, { dimColor: true }, ` (${secs}s · ↓ ${k(Math.round(turn.chars / 4))} tokens${turn.tps === undefined ? "" : ` · ${turn.tps} tok/s`})`))
     : null;
 
   const prompt =

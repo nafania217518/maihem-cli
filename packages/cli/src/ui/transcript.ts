@@ -15,7 +15,7 @@ export type Block =
   | { kind: "step"; n: number; at?: number }
   | { kind: "thinking"; text: string; at?: number }
   | { kind: "compacted"; before: number; after: number; at?: number }
-  | { kind: "turn-end"; usage?: Usage; ms?: number; interrupted?: boolean; incomplete?: Incomplete; steps?: number; rateLimits?: Record<string, string>; chat?: boolean; at?: number }
+  | { kind: "turn-end"; usage?: Usage; ms?: number; interrupted?: boolean; incomplete?: Incomplete; steps?: number; tps?: number; rateLimits?: Record<string, string>; chat?: boolean; at?: number }
   | { kind: "error"; message: string; status?: number; attempts?: number; at?: number };
 type Opts = { width: number; detailed: boolean };
 
@@ -43,7 +43,7 @@ export function toBlocks(events: AgentEvent[], readonly = false): Block[] {
     } else if (e.type === "step") out.push({ kind: "step", n: ++step, at: e.at });
     else if (e.type === "done") {
       const ms = e.at !== undefined && userAt !== undefined ? e.at - userAt : undefined;
-      out.push({ kind: "turn-end", usage: e.usage, ms, interrupted: e.interrupted, incomplete: e.incomplete, steps: e.steps, rateLimits: e.rateLimits, chat: !readonly, at: e.at });
+      out.push({ kind: "turn-end", usage: e.usage, ms, interrupted: e.interrupted, incomplete: e.incomplete, steps: e.steps, tps: e.tps, rateLimits: e.rateLimits, chat: !readonly, at: e.at });
     } else if (e.type === "error") out.push({ kind: "error", message: e.message, status: e.status, attempts: e.attempts, at: e.at });
   }
   return out;
@@ -115,7 +115,7 @@ function render(b: Block, o: Opts): string[] {
       if (!o.detailed) return out;
       const u = b.usage ?? {};
       const tok = [u.inputTokens !== undefined && `↑ ${k(u.inputTokens)}`, u.outputTokens !== undefined && `↓ ${k(u.outputTokens)}`].filter(Boolean);
-      const parts = [tok.length ? `${tok.join(" ")} tokens` : "", b.ms !== undefined ? `${(b.ms / 1000).toFixed(1)}s` : ""].filter(Boolean);
+      const parts = [tok.length ? `${tok.join(" ")} tokens` : "", b.ms !== undefined ? `${(b.ms / 1000).toFixed(1)}s` : "", b.tps !== undefined ? `${b.tps} tok/s` : ""].filter(Boolean);
       if (parts.length) out.push(chalk.dim(`  ⎿  ${parts.join(" · ")}`));
       const rl = Object.entries(b.rateLimits ?? {}).map(([a, v]) => `${a}=${v}`);
       if (rl.length) out.push(chalk.dim(`  ⎿  rate limits: ${rl.join(" · ")}`));
