@@ -259,6 +259,12 @@ describe("daemon", () => {
     expect((fake.opts.at(-1) as { oneShot: boolean }).oneShot).toBe(true);
     expect(loadState(id)).toMatchObject({ status: "exited", exitCode: 2, detail: "step limit" });
   });
+  it("run -d with an empty final step exits 2 with detail no output", async () => {
+    setup({ mode: "run", task: "go" });
+    const h = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: [stream([{ type: "finish", finishReason: { unified: "stop", raw: "" }, usage }])] }) });
+    await h.done;
+    expect(loadState(id)).toMatchObject({ status: "exited", exitCode: 2, detail: "no output" });
+  });
   it("chat clears the detail on the next message", async () => {
     setup();
     let calls = 0;

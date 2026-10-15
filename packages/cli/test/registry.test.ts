@@ -39,6 +39,10 @@ describe("registry", () => {
   it("loadImage throws for missing", () => {
     expect(() => loadImage("nope")).toThrow("no such image: nope; add it: maihem image add --name nope … or maihem apply -f FILE");
   });
+  it("workdir is an unknown field in apply files", () => {
+    expect(() => checkImages({ x: { provider: "p", model: "m", workdir: "/w" } })).toThrow('apply file: unknown field "workdir" in image "x"');
+  });
+
   it("checkImages reads a map keyed by name, rejects unknown fields, and keeps the base_url hint", () => {
     expect(checkImages({ a: { provider: "p", model: "m", max_steps: 3 }, b: { provider: "p", model: "m" } }).map((d) => [d.name, d.max_steps])).toEqual([["a", 3], ["b", 50]]);
     expect(() => checkImages({ a: { provider: "p", model: "m", foo: 1 } })).toThrow('apply file: unknown field "foo" in image "a"');

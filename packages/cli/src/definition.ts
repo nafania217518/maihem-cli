@@ -53,13 +53,11 @@ export function validate(raw: Record<string, unknown>): Definition {
   };
   if (raw.reasoning !== undefined) d.reasoning = raw.reasoning as Reasoning;
   if (raw.context !== undefined) d.context = raw.context as number;
-  for (const k of ["system", "workdir"] as const) {
-    if (typeof raw[k] === "string") d[k] = raw[k] as string;
-  }
+  if (typeof raw.system === "string") d.system = raw.system;
   return d;
 }
 
-export const FIELDS = ["name", "provider", "model", "system", "tools", "sandbox", "workdir", "max_steps", "reasoning", "context", "on_context_full", "compact_at"];
+export const FIELDS = ["name", "provider", "model", "system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at"];
 export const isMap = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 
 // Checks an apply-file section: a map of name: settings, known fields only.

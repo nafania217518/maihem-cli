@@ -198,6 +198,9 @@ describe("agent signals", () => {
     for (const l of both(toBlocks([{ type: "compacted", before: 52100, after: 8700 }]))) expect(l).toEqual(["  ⎿  Context compacted: 52.1k → ~8.7k tokens"]);
   });
 
+  it("no output notice is shown", () => {
+    for (const l of both(toBlocks([{ type: "done", incomplete: "no output" }]))) expect(l[0]).toBe("  ⎿  Finished without output · send a message to continue");
+  });
   it("incomplete notices show in both views", () => {
     chalk.level = 1;
     const cases: [AgentEvent, string][] = [

@@ -37,6 +37,10 @@ describe("definition", () => {
     expect(() => parseDefinition(JSON.stringify({ ...base, max_steps: 0 }))).toThrow(/max_steps/);
     expect(() => parseDefinition("just a string")).toThrow();
   });
+  it("a stored image ignores an old workdir key", () => {
+    expect(parseDefinition("name: a\nprovider: p\nmodel: m\nworkdir: /old\n").workdir).toBeUndefined();
+  });
+
   it("applyOverrides changes sandbox/workdir/max_steps without mutating input", () => {
     const d = parseDefinition(JSON.stringify(base));
     expect(applyOverrides(d, { sandbox: false, workdir: "/w", max_steps: 3 })).toMatchObject({ sandbox: false, workdir: "/w", max_steps: 3 });

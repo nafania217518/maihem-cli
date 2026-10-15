@@ -2,7 +2,7 @@ export type ClientMessage = { type: "msg"; text: string } | { type: "stop"; appl
 
 type Stamped<T> = T & { at?: number };
 
-export type Incomplete = "step limit" | "output limit" | "context full" | "content filter";
+export type Incomplete = "step limit" | "output limit" | "context full" | "content filter" | "no output";
 
 export type AgentEvent =
   | { type: "hello"; name: string; model: string; provider: string; sandbox: boolean; id: string; readonly: boolean; workdir: string; history: AgentEvent[] }

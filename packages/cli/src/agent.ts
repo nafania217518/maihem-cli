@@ -20,6 +20,7 @@ export interface AgentOptions {
   onContextFull?: "compact" | "fail";
   compactAt?: number;
   oneShot?: boolean;
+  requireOutput?: boolean; // an empty final step marks the turn "no output"
 }
 
 const WRAP_UP = "You reached the step limit. Do not call tools. Summarise what you did, what is left, and stop.";
@@ -46,7 +47,7 @@ export function createAgent(opts: AgentOptions): Agent {
       let saved = [...messages];
       const commit = (): void => { messages = saved; };
       if (fail && budget && used >= budget) { commit(); emit({ type: "done", incomplete: "context full" }); return ""; }
-      let text = "";
+      let text = "", stepText = "";
       const usage = { inputTokens: 0, outputTokens: 0 };
       const gen = { tokens: 0, ms: 0 };
       let count = 0, wrap = false, full = false;
@@ -80,9 +81,9 @@ export function createAgent(opts: AgentOptions): Agent {
           onStepEnd: (step) => { saved = [...saved, ...step.response.messages]; used = total(step.usage); },
         });
         for await (const part of result.fullStream) {
-          if (part.type === "text-delta") { text += part.text; emit({ type: "text", delta: part.text }); }
+          if (part.type === "text-delta") { text += part.text; stepText += part.text; emit({ type: "text", delta: part.text }); }
           else if (part.type === "reasoning-delta") emit({ type: "thinking", delta: part.text });
-          else if (part.type === "start-step") { flush(); emit({ type: "step" }); }
+          else if (part.type === "start-step") { stepText = ""; flush(); emit({ type: "step" }); }
           else if (part.type === "finish-step") {
             count++; last = part;
             usage.inputTokens += part.usage.inputTokens ?? 0; usage.outputTokens += part.usage.outputTokens ?? 0;
@@ -136,7 +137,8 @@ export function createAgent(opts: AgentOptions): Agent {
         : wrap || (fr === "tool-calls" && steps >= opts.maxSteps) ? "step limit"
         : last?.rawFinishReason === EXCEEDED ? "context full"
         : fr === "length" ? "output limit"
-        : fr === "content-filter" ? "content filter" : undefined;
+        : fr === "content-filter" ? "content filter"
+        : opts.requireOutput && !stepText.trim() ? "no output" : undefined;
       const headers = last?.response.headers ?? {};
       const rateLimits = Object.fromEntries(RATE_KEYS.filter((k) => headers[k] !== undefined).map((k) => [k, headers[k]]));
       emit({ type: "done", usage, steps, ...(gen.ms > 0 && { tps: Math.round(1000 * gen.tokens / gen.ms) }), ...(incomplete && { incomplete }), ...(Object.keys(rateLimits).length && { rateLimits }) });

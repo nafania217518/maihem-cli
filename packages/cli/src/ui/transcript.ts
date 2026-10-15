@@ -58,6 +58,7 @@ const NOTICE: Record<Incomplete, string> = {
   "output limit": "Output limit reached, the answer is cut",
   "context full": "Context full",
   "content filter": "Stopped by the content filter",
+  "no output": "Finished without output",
 };
 const clock = (at: number) => new Date(at).toTimeString().slice(0, 8);
 export const k = (n: number) => (n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n));

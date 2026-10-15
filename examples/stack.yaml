@@ -13,7 +13,8 @@ images:
     model: qwen3.5:9b-mlx
     system: |
       You are a helpful assistant working in a directory.
-      Use the tools to do what the user asks. Then say what you did.
+      Use the tools to do what the user asks.
+      Reply with the result only: no greeting, no summary of your steps.
     tools: [read, write, edit, list, exec]
     sandbox: true
     max_steps: 30
@@ -35,3 +36,10 @@ images:
     tools: [read, write, edit, list]
     sandbox: false
     max_steps: 40
+  translator:
+    provider: ollama
+    model: qwen3.5:9b-mlx
+    tools: []
+    system: |
+      Translate the input into the language that the task names.
+      Reply with the translation only: no greeting, no explanation, no markdown fences.

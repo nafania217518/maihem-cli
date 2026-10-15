@@ -24,7 +24,14 @@ import { copyIn, copyOut } from "./sync.ts";
 import { createTools } from "./tools.ts";
 import { ensureWorker } from "./worker.ts";
 
-export const deps: { spawn: typeof spawn; attach: typeof attach; stdin: NodeJS.ReadableStream & { isTTY?: boolean }; stdout: NodeJS.WritableStream & { isTTY?: boolean }; pollMs: number } = { spawn, attach, stdin: process.stdin, stdout: process.stdout, pollMs: 100 };
+type StdinKind = "tty" | "pipe" | "file" | "other";
+function stdinKind(): StdinKind {
+  if (deps.stdin.isTTY) return "tty";
+  const st = fs.fstatSync(0);
+  return st.isFIFO() ? "pipe" : st.isFile() ? "file" : "other";
+}
+export const deps: { spawn: typeof spawn; attach: typeof attach; stdin: NodeJS.ReadableStream & { isTTY?: boolean }; stdout: NodeJS.WritableStream & { isTTY?: boolean }; pollMs: number; stdinKind: () => StdinKind } =
+  { spawn, attach, stdin: process.stdin, stdout: process.stdout, pollMs: 100, stdinKind };
 
 const dim = (s: string): string => `\x1b[2m${s}\x1b[0m`;
 
@@ -44,24 +51,24 @@ export async function openBackend(def: Definition, id: string): Promise<Backend>
   return backend;
 }
 
-export function buildAgent(def: Definition, provider: Resolved, backend: Backend, model?: LanguageModel, oneShot = false): Agent {
+export function buildAgent(def: Definition, provider: Resolved, backend: Backend, model?: LanguageModel, oneShot = false, requireOutput = false): Agent {
   return createAgent({ model: model ?? createModel(def, provider), system: def.system, tools: createTools(backend, def.tools), maxSteps: def.max_steps,
-    reasoning: def.reasoning, context: def.context, onContextFull: def.on_context_full, compactAt: def.compact_at, oneShot });
+    reasoning: def.reasoning, context: def.context, onContextFull: def.on_context_full, compactAt: def.compact_at, oneShot, requireOutput });
 }
 
 export function incompleteText(e: DoneEvent): string {
-  return e.incomplete === "step limit" ? `step limit reached (${e.steps})` : e.incomplete === "output limit" ? "output limit reached" : e.incomplete!;
+  return e.incomplete === "step limit" ? `step limit reached (${e.steps})` : e.incomplete === "output limit" ? "output limit reached" : e.incomplete === "no output" ? "agent finished without output" : e.incomplete!;
 }
 
 function newState(id: string, def: Definition, pid: number): AgentState {
   return { id, name: def.name, pid, status: "running", workdir: def.workdir!, sandbox: def.sandbox, started: new Date().toISOString(), log: logPath(id), sock: sockPath(id) };
 }
 
-export function spawnAgent(def: Definition, task: string | undefined, provider: Resolved, mode: "run" | "chat"): AgentState {
+export function spawnAgent(def: Definition, task: string | undefined, provider: Resolved, mode: "run" | "chat", allowEmpty = false): AgentState {
   const id = newId();
   const state = newState(id, def, 0);
   saveState(state);
-  fs.writeFileSync(runFile(id), JSON.stringify({ def, task, provider, mode }), { mode: 0o600 });
+  fs.writeFileSync(runFile(id), JSON.stringify({ def, task, provider, mode, allowEmpty }), { mode: 0o600 });
   const binPath = fileURLToPath(new URL("../bin/maihem.js", import.meta.url));
   const logFd = fs.openSync(state.log, "a");
   const child = deps.spawn(process.execPath, [binPath, "__agent", id], { detached: true, stdio: ["ignore", logFd, logFd], env: process.env });
@@ -76,7 +83,7 @@ async function readStdin(): Promise<string | undefined> {
   if (deps.stdin.isTTY) return undefined;
   let text = "";
   for await (const chunk of deps.stdin) text += chunk.toString();
-  return text.trim() || undefined;
+  return text.trim();
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -94,11 +101,15 @@ export async function launchCommand(args: RunArgs): Promise<number> {
 
 export async function runCommand(args: RunArgs): Promise<number> {
   const { def } = args;
-  const task = args.task ?? (await readStdin());
+  midLine = false;
+  // with a task argument, read only a pipe or file: a socket stdin may never close
+  const input = args.task && !["pipe", "file"].includes(deps.stdinKind()) ? undefined : await readStdin();
+  if (args.task && input === "") throw new Error("piped input is empty");
+  const task = args.task && input ? `${args.task}\n\n<input>\n${input}\n</input>` : args.task ?? input;
   if (!task) throw new Error("run needs a task; use maihem launch for chat");
   const provider = resolveProvider(def.provider);
   if (args.detach) {
-    console.log(spawnAgent(def, task, provider, "run").id);
+    console.log(spawnAgent(def, task, provider, "run", args.allowEmpty).id);
     return 0;
   }
   const id = newId();
@@ -106,20 +117,20 @@ export async function runCommand(args: RunArgs): Promise<number> {
   saveState(state);
   console.error(id);
   const backend = await openBackend(def, id);
-  const agent = buildAgent(def, provider, backend, undefined, true);
+  const agent = buildAgent(def, provider, backend, undefined, true, !args.allowEmpty);
   let exitCode = 0;
   let done: DoneEvent | undefined;
   const live = deps.stdout.isTTY;
-  let final = ""; // piped: only the last step's text goes to stdout
+  let step = ""; // piped: only the final step's text goes to stdout
   try {
     await agent.run(task, (e) => {
-      if (e.type === "step") final = "";
-      if (!live && e.type === "text") final += e.delta;
+      if (e.type === "step") step = "";
+      if (!live && e.type === "text") step += e.delta;
       else printEvent(e);
       if (e.type === "done" && e.incomplete) done = e;
     });
     if (live) deps.stdout.write("\n");
-    else if (final) deps.stdout.write(final + "\n");
+    else if (step.trim()) deps.stdout.write(step + "\n");
   } catch (e) {
     console.error(`error: ${(e as Error).message}`);
     exitCode = 1;

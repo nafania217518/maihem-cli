@@ -228,6 +228,24 @@ describe("agent", () => {
     expect(JSON.stringify(model.doStreamCalls[2].prompt.at(-1))).toContain("step limit");
     expect(events.at(-1)).toMatchObject({ type: "done", incomplete: "step limit", steps: 2 });
   });
+  it("an empty final step marks a one-shot turn as no output", async () => {
+    const model = new MockLanguageModelV4({ doStream: [toolStep(), stream([finish("stop")])] });
+    const events: AgentEvent[] = [];
+    await createAgent({ model, tools, maxSteps: 5, requireOutput: true }).run("t", (e) => events.push(e));
+    expect(events.at(-1)).toMatchObject({ type: "done", incomplete: "no output" });
+  });
+  it("requireOutput off keeps an empty final step complete", async () => {
+    const model = new MockLanguageModelV4({ doStream: [toolStep(), stream([finish("stop")])] });
+    const events: AgentEvent[] = [];
+    await createAgent({ model, tools, maxSteps: 5 }).run("t", (e) => events.push(e));
+    expect(events.at(-1)).not.toHaveProperty("incomplete");
+  });
+  it("step limit keeps priority over no output", async () => {
+    const model = new MockLanguageModelV4({ doStream: async () => toolStep() });
+    const events: AgentEvent[] = [];
+    await createAgent({ model, tools, maxSteps: 2, requireOutput: true }).run("t", (e) => events.push(e));
+    expect(events.at(-1)).toMatchObject({ type: "done", incomplete: "step limit" });
+  });
   it("error events carry status and attempts", async () => {
     const model = new MockLanguageModelV4({ doStream: async () => { throw new APICallError({ message: "overloaded", url: "x", requestBodyValues: {}, statusCode: 503, responseHeaders: { "retry-after-ms": "0" } }); } });
     const events: AgentEvent[] = [];

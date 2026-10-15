@@ -13,10 +13,10 @@ export interface DaemonHandle { shutdown(apply?: boolean): Promise<void>; done: 
 
 export async function serveAgent(id: string, opts: { model?: LanguageModel } = {}): Promise<DaemonHandle> {
   const state = loadState(id);
-  const { def, task, provider, mode = "chat" } = JSON.parse(fs.readFileSync(runFile(id), "utf8")) as { def: Definition; task?: string; provider: Resolved; mode?: "run" | "chat" };
+  const { def, task, provider, mode = "chat", allowEmpty } = JSON.parse(fs.readFileSync(runFile(id), "utf8")) as { def: Definition; task?: string; provider: Resolved; mode?: "run" | "chat"; allowEmpty?: boolean };
   const readonly = mode === "run";
   const backend = await openBackend(def, id);
-  const agent = buildAgent(def, provider, backend, opts.model, readonly);
+  const agent = buildAgent(def, provider, backend, opts.model, readonly, readonly && !allowEmpty);
   const clients = new Set<net.Socket>();
   let busy = false;
   let exitCode = 0;

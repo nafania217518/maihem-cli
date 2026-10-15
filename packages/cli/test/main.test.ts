@@ -318,7 +318,7 @@ describe("main", () => {
     expect(await main(["bogus"])).toBe(1);
     expect(err.mock.calls[0][0]).toMatch(/maihem launch NAME \[FIRST_MESSAGE\] \[-d\]/);
     expect(err.mock.calls[0][0]).toContain("maihem stop [--discard] ID");
-    expect(err.mock.calls[0][0]).toContain("[TASK] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N]\n");
+    expect(err.mock.calls[0][0]).toContain("[TASK] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N] [--allow-empty]\n");
     expect(err.mock.calls[0][0]).not.toContain("--api-key KEY]\n  maihem run");
     expect(err.mock.calls[0][0]).toContain("maihem provider add --name NAME --kind openai|anthropic|ollama");
   });
@@ -362,6 +362,11 @@ describe("main", () => {
   it("an unknown image name fails with the add hint", async () => {
     expect(await main(["run", "x", "t"])).toBe(1);
     expect(err.mock.calls[0][0]).toBe("error: no such image: x; add it: maihem image add --name x … or maihem apply -f FILE");
+  });
+  it("launch rejects --allow-empty", async () => {
+    saveImage(def("reg"));
+    expect(await main(["launch", "reg", "--allow-empty", "x"])).toBe(1);
+    expect(err.mock.calls[0][0]).toMatch(/Unknown option/);
   });
   it("run and launch reject -f, --name and inline flags", async () => {
     saveImage(def("reg"));

@@ -26,7 +26,7 @@ const USAGE = `usage:
   maihem image ls
   maihem image inspect NAME
   maihem apply -f FILE
-  maihem run NAME [TASK] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N]
+  maihem run NAME [TASK] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N] [--allow-empty]
   maihem launch NAME [FIRST_MESSAGE] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N]
   maihem ps
   maihem provider add --name NAME --kind openai|anthropic|ollama [--base-url U] [--api-key K|'$VAR'] [--header K=V]...
@@ -47,18 +47,19 @@ const RUN_OPTIONS = {
   workdir: { type: "string" },
   "max-steps": { type: "string" },
 } as const;
+const RUN_ONLY = { ...RUN_OPTIONS, "allow-empty": { type: "boolean", default: false } } as const;
 
-export interface RunArgs { def: Definition; task?: string; detach: boolean }
+export interface RunArgs { def: Definition; task?: string; detach: boolean; allowEmpty?: boolean }
 
 export function resolveRunArgs(argv: string[], cmd = "run"): RunArgs {
-  const { values: v, positionals: [name, task] } = parseArgs({ args: argv, options: RUN_OPTIONS, allowPositionals: true });
+  const { values: v, positionals: [name, task] } = parseArgs({ args: argv, options: cmd === "run" ? RUN_ONLY : RUN_OPTIONS, allowPositionals: true });
   if (!name) throw new Error(cmd === "run" ? "run needs an image name: maihem run NAME [TASK]" : "launch needs an image name: maihem launch NAME [FIRST_MESSAGE]");
   const def = applyOverrides(loadImage(name), {
     sandbox: v["no-sandbox"] ? false : undefined,
     workdir: path.resolve(v.workdir ?? process.cwd()),
     max_steps: v["max-steps"] === undefined ? undefined : Number(v["max-steps"]),
   });
-  return { def, task, detach: v.detach };
+  return { def, task, detach: v.detach, allowEmpty: (v as { "allow-empty"?: boolean })["allow-empty"] };
 }
 
 const pad = (rows: string[][]): string[] => {

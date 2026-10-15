@@ -34,6 +34,7 @@ vi.mock("../src/worker.ts", () => ({ ensureWorker: w.ensureWorker, startWorker: 
 vi.mock("../src/backend-sandbox.ts", () => ({ createSandboxBackend: w.createSandboxBackend }));
 vi.mock("../src/sync.ts", () => ({ copyIn: w.copyIn, copyOut: w.copyOut }));
 
+const stdinKind0 = deps.stdinKind;
 describe("run", () => {
   let home: string;
   let work: string;
@@ -51,6 +52,7 @@ describe("run", () => {
     vi.spyOn(console, "log").mockImplementation((s) => { out += s + "\n"; });
     vi.spyOn(console, "error").mockImplementation((s) => { err += s + "\n"; });
     modelImpl = () => new MockLanguageModelV4({ doStream: steps() });
+    deps.stdinKind = stdinKind0;
     deps.stdout = { write: (s: string) => { out += s; return true; } } as never;
     vi.clearAllMocks();
   });
@@ -86,6 +88,16 @@ describe("run", () => {
     expect(await main(args("--no-sandbox", "do it"))).toBe(0);
     expect(out).toBe("answer\n");
   });
+  it("print state does not leak from one run to the next", async () => {
+    deps.stdout = { isTTY: true, write: (s: string) => { out += s; return true; } } as never;
+    modelImpl = () => new MockLanguageModelV4({ doStream: [steps()[1]] });
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    deps.stdout = { write: (s: string) => { out += s; return true; } } as never;
+    modelImpl = () => new MockLanguageModelV4({ doStream: steps() });
+    out = "";
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    expect(out).toBe("answer\n");
+  });
   it("piped run writes nothing to stdout on error", async () => {
     modelImpl = () => new MockLanguageModelV4({ doStream: async () => { throw new Error("boom"); } });
     expect(await main(args("--no-sandbox", "do it"))).toBe(1);
@@ -99,6 +111,53 @@ describe("run", () => {
       expect(await main(args("--no-sandbox", "do it"))).toBe(2);
     } finally { fake.agent = undefined; }
     expect(out).toBe("partial\n");
+  });
+  const emptyFinal = () => new MockLanguageModelV4({ doStream: [
+    stream([{ type: "text-start", id: "a" }, { type: "text-delta", id: "a", delta: "first" }, { type: "text-end", id: "a" }, { type: "tool-call", toolCallId: "c1", toolName: "write", input: JSON.stringify({ path: "out.txt", content: "data" }) }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }]),
+    stream([{ type: "finish", finishReason: { unified: "stop", raw: "" }, usage }]),
+  ] });
+  it("piped run writes nothing when the final step is empty", async () => {
+    modelImpl = emptyFinal;
+    await main(args("--no-sandbox", "do it"));
+    expect(out).toBe("");
+  });
+  it("foreground run with an empty final step returns 2 and says so", async () => {
+    modelImpl = emptyFinal;
+    expect(await main(args("--no-sandbox", "do it"))).toBe(2);
+    expect(err).toContain("incomplete: agent finished without output\n");
+    expect(listStates()[0]).toMatchObject({ exitCode: 2, detail: "no output" });
+  });
+  it("--allow-empty lets an empty final step exit 0", async () => {
+    modelImpl = emptyFinal;
+    expect(await main(args("--no-sandbox", "--allow-empty", "do it"))).toBe(0);
+  });
+  const taskOf = async (...a: string[]) => {
+    let task = "";
+    fake.agent = () => ({ history: [], interrupt: () => {}, run: async (t: string) => { task = t; } });
+    try { expect(await main(args("--no-sandbox", ...a))).toBe(0); } finally { fake.agent = undefined; }
+    return task;
+  };
+  it("run with a task and piped input sends one message with the input block", async () => {
+    deps.stdin = Readable.from(["some text\n"]);
+    deps.stdinKind = () => "pipe";
+    expect(await taskOf("summarise")).toBe("summarise\n\n<input>\nsome text\n</input>");
+  });
+  it("run with a task does not read a socket stdin", async () => {
+    deps.stdin = Object.assign(Readable.from([]), { [Symbol.asyncIterator]: () => { throw new Error("read"); } });
+    deps.stdinKind = () => "other";
+    expect(await taskOf("summarise")).toBe("summarise");
+  });
+  it("run with only piped input uses it as the task", async () => {
+    deps.stdin = Readable.from(["piped task\n"]);
+    deps.stdinKind = () => "pipe";
+    expect(await taskOf()).toBe("piped task");
+  });
+  it("a task with empty piped input fails", async () => {
+    deps.stdin = Readable.from(["  \n"]);
+    deps.stdinKind = () => "file";
+    expect(await main(args("--no-sandbox", "summarise"))).toBe(1);
+    expect(err).toContain("piped input is empty");
+    expect(listStates()).toEqual([]);
   });
   it("sandbox run calls ensureWorker, copyIn, copyOut in order", async () => {
     const backend = { root: "/workspace", readFile: vi.fn(), writeFile: vi.fn(async () => {}), exec: vi.fn() };
