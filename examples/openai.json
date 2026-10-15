@@ -1,9 +1,0 @@
-{
-  "name": "writer",
-  "provider": "openai",
-  "model": "gpt-6-luna",
-  "system": "You write and edit documents in the working directory.",
-  "tools": ["read", "write", "edit", "list"],
-  "sandbox": false,
-  "max_steps": 40
-}

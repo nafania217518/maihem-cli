@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
-import { parseDefinition } from "./definition.ts";
+import { checkEntries, FIELDS, parseDefinition, validate } from "./definition.ts";
 import type { Definition } from "./definition.ts";
 
 export const home = (): string => process.env.MAIHEM_HOME ?? path.join(os.homedir(), ".maihem");
@@ -15,7 +15,7 @@ export function saveImage(def: Definition, name: string = def.name): void {
 }
 
 export function loadImage(name: string): Definition {
-  if (!fs.existsSync(file(name))) throw new Error(`no such image: ${name}`);
+  if (!fs.existsSync(file(name))) throw new Error(`no such image: ${name}; add it: maihem image add --name ${name} … or maihem apply -f FILE`);
   return parseDefinition(fs.readFileSync(file(name), "utf8"));
 }
 
@@ -31,3 +31,5 @@ export function removeImage(name: string): void {
   loadImage(name);
   fs.rmSync(file(name));
 }
+
+export const checkImages = (sec: unknown): Definition[] => checkEntries("image", sec, [...FIELDS, "base_url", "api_key"], validate);

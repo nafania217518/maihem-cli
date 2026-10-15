@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { main, resolveRunArgs } from "../src/main.ts";
-import { saveImage } from "../src/registry.ts";
+import { loadImage, saveImage } from "../src/registry.ts";
 import { saveState, loadState, logPath, sockPath } from "../src/state.ts";
 import { parseDefinition } from "../src/definition.ts";
 import { loadProvider, saveProvider } from "../src/providers.ts";
@@ -41,21 +41,140 @@ describe("main", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("build saves image and prints built", async () => {
-    expect(await main(["build", "-f", file, "--name", "b"])).toBe(0);
-    expect(out()).toBe("built b");
-    expect(fs.existsSync(path.join(home, "images", "b.yaml"))).toBe(true);
+  describe("image", () => {
+    const img = (...a: string[]) => main(["image", ...a]);
+    const yaml = (y: string) => { const f = path.join(home, "i.yaml"); fs.writeFileSync(f, y); return f; };
+    beforeEach(() => saveProvider({ name: "op", kind: "openai" }));
+    it("image add saves an image and refuses an existing name", async () => {
+      expect(await img("add", "--name", "a", "--provider", "op", "--model", "gpt", "--system", "hi", "--tools", "read,list", "--no-sandbox", "--max-steps", "7", "--reasoning", "low", "--context", "1000", "--on-context-full", "fail", "--compact-at", "0.5")).toBe(0);
+      expect(out()).toBe("added a");
+      expect(loadImage("a")).toEqual({ name: "a", provider: "op", model: "gpt", system: "hi", tools: ["read", "list"], sandbox: false, max_steps: 7, reasoning: "low", context: 1000, on_context_full: "fail", compact_at: 0.5 });
+      expect(await img("add", "--name", "a", "--provider", "op", "--model", "x")).toBe(1);
+      expect(err.mock.calls[0][0]).toBe('error: image "a" already exists; use maihem image update a');
+      expect(loadImage("a").model).toBe("gpt");
+      expect(await img("add", "--name", "b", "--provider", "op")).toBe(1);
+    });
+    it("image add fails for an unknown provider", async () => {
+      expect(await img("add", "--name", "a", "--provider", "nope", "--model", "m")).toBe(1);
+      expect(err.mock.calls[0][0]).toMatch(/^error: provider "nope" not found; add it: maihem provider add/);
+      expect(() => loadImage("a")).toThrow();
+    });
+    it("image add validates numeric and enum flags", async () => {
+      const base = ["add", "--name", "a", "--provider", "op", "--model", "m"];
+      expect(await img(...base, "--max-steps", "x")).toBe(1);
+      expect(await img(...base, "--context", "0")).toBe(1);
+      expect(await img(...base, "--compact-at", "2")).toBe(1);
+      expect(await img(...base, "--reasoning", "huge")).toBe(1);
+      expect(await img(...base, "--on-context-full", "x")).toBe(1);
+      expect(await img(...base, "--tools", "nope")).toBe(1);
+      expect(err.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+        "error: definition: max_steps must be a positive integer",
+        "error: definition: context must be a positive integer",
+        "error: definition: compact_at must be a number in (0, 1]",
+        expect.stringMatching(/^error: definition: unknown reasoning "huge"/),
+        'error: definition: on_context_full must be "compact" or "fail"',
+        expect.stringMatching(/^error: definition: unknown tool "nope"/),
+      ]);
+      expect(() => loadImage("a")).toThrow();
+    });
+    it("image update patches flags and --unset restores defaults", async () => {
+      await img("add", "--name", "a", "--provider", "op", "--model", "m", "--no-sandbox", "--max-steps", "3", "--system", "s");
+      expect(await img("update", "a", "--model", "m2", "--context", "500")).toBe(0);
+      expect(loadImage("a")).toMatchObject({ model: "m2", context: 500, sandbox: false, max_steps: 3, system: "s" });
+      expect(await img("update", "a", "--unset", "sandbox", "--unset", "max_steps", "--unset", "system", "--unset", "context")).toBe(0);
+      const d = loadImage("a");
+      expect([d.sandbox, d.max_steps, d.system, d.context]).toEqual([true, 50, undefined, undefined]);
+      expect(out()).toBe("added a\nupdated a\nupdated a");
+      expect(await img("update", "a", "--unset", "model")).toBe(1);
+      expect(err.mock.calls[0][0]).toMatch(/^error: image: --unset takes system, tools, sandbox/);
+      expect(await img("update", "a", "--provider", "nope")).toBe(1);
+      expect(loadImage("a").provider).toBe("op");
+      expect(await img("update", "nope")).toBe(1);
+      expect(await img("update")).toBe(1);
+    });
+    it("image rm, ls and inspect work", async () => {
+      saveImage(def("a"));
+      expect(await img("ls")).toBe(0);
+      expect(out()).toMatch(/NAME\s+PROVIDER\s+MODEL\s+SANDBOX\s+TOOLS/);
+      expect(out()).toMatch(/a\s+openai\s+gpt\s+true\s+read,write,edit,list,exec/);
+      log.mockClear();
+      expect(await img("inspect", "a")).toBe(0);
+      expect(out()).toContain("provider: openai");
+      log.mockClear();
+      expect(await img("rm", "a")).toBe(0);
+      expect(out()).toBe("removed a");
+      expect(await img("inspect", "a")).toBe(1);
+      expect(err.mock.calls[0][0]).toBe("error: no such image: a; add it: maihem image add --name a … or maihem apply -f FILE");
+      expect(await img("rm", "a")).toBe(1);
+      expect(await img("rm")).toBe(1);
+      expect(await img("inspect")).toBe(1);
+      expect(await img("bogus")).toBe(1);
+    });
+    it("maihem apply saves providers before images and lets images use providers from the same file", async () => {
+      saveImage(parseDefinition("name: old\nprovider: op\nmodel: m\n"));
+      const f = yaml("providers:\n  ol: {kind: ollama}\n  op: {kind: openai, api_key: k}\nimages:\n  h: {provider: ol, model: m}\n  old: {provider: op, model: m2}\n");
+      expect(await main(["apply", "-f", f])).toBe(0);
+      expect(out()).toBe("created provider ol\nreplaced provider op\ncreated image h\nreplaced image old");
+      expect(err.mock.calls[0][0]).toMatch(/^warning: api_key for "op"/);
+      expect(loadImage("h").provider).toBe("ol");
+      expect(await main(["apply", "-f", yaml("images:\n  x: {provider: op, model: m}\n")])).toBe(0);
+      expect(await main(["apply", "-f", yaml("providers:\n  z: {kind: ollama}\n")])).toBe(0);
+      expect(await main(["apply", "-f", yaml("providers:\n  q: {kind: ollama}\nimages:\n  y: {provider: nope, model: m}\n")])).toBe(1);
+      expect(() => loadProvider("q")).toThrow(/not found/);
+      expect(await main(["apply", "-f", f, "--name", "z"])).toBe(1);
+      expect(await main(["apply"])).toBe(1);
+    });
+    it("apply reads providers and images as maps keyed by name", async () => {
+      const f = yaml("providers:\n  ollama:\n    kind: ollama\nimages:\n  local-helper:\n    provider: ollama\n    model: qwen3.5:9b-mlx\n    tools: [read, write, edit, list, exec]\n    max_steps: 30\n");
+      expect(await main(["apply", "-f", f])).toBe(0);
+      expect(out()).toBe("created provider ollama\ncreated image local-helper");
+      expect(loadProvider("ollama")).toEqual({ name: "ollama", kind: "ollama" });
+      expect(loadImage("local-helper")).toMatchObject({ name: "local-helper", provider: "ollama", max_steps: 30 });
+    });
+    it("apply rejects the old list format with a hint", async () => {
+      expect(await main(["apply", "-f", yaml("providers:\n  - name: o\n    kind: ollama\n")])).toBe(1);
+      expect(err.mock.calls[0][0]).toBe('error: apply file: "providers" must be a map of name: settings');
+      expect(await main(["apply", "-f", yaml("images:\n  - {name: a, provider: p, model: m}\n")])).toBe(1);
+      expect(err.mock.calls[1][0]).toBe('error: apply file: "images" must be a map of name: settings');
+    });
+    it("apply rejects a name field inside an entry", async () => {
+      expect(await main(["apply", "-f", yaml("images:\n  x: {name: x, provider: p, model: m}\n")])).toBe(1);
+      expect(err.mock.calls[0][0]).toBe('error: apply file: unknown field "name" in image "x" (the key is the name)');
+      expect(await main(["apply", "-f", yaml("providers:\n  o: {name: o, kind: ollama}\n")])).toBe(1);
+      expect(err.mock.calls[1][0]).toBe('error: apply file: unknown field "name" in provider "o" (the key is the name)');
+    });
+    it("apply rejects an entry that is not a map", async () => {
+      expect(await main(["apply", "-f", yaml("providers:\n  ollama:\n")])).toBe(1);
+      expect(err.mock.calls[0][0]).toBe('error: apply file: provider "ollama" must be a map');
+      expect(await main(["apply", "-f", yaml("images:\n  x: 1\n")])).toBe(1);
+      expect(err.mock.calls[1][0]).toBe('error: apply file: image "x" must be a map');
+    });
+    it("apply rejects duplicate keys", async () => {
+      expect(await main(["apply", "-f", yaml("providers:\n  o: {kind: ollama}\n  o: {kind: openai}\n")])).toBe(1);
+      expect(err.mock.calls[0][0]).toMatch(/Map keys must be unique/);
+      expect(() => loadProvider("o")).toThrow(/not found/);
+    });
+    it("provider apply and image apply are gone", async () => {
+      const f = yaml("providers:\n  o: {kind: ollama}\n");
+      expect(await main(["provider", "apply", "-f", f])).toBe(1);
+      expect(await main(["image", "apply", "-f", f])).toBe(1);
+      expect(err.mock.calls.map((c: unknown[]) => String(c[0]).split("\n")[0])).toEqual(["usage:", "usage:"]);
+      expect(() => loadProvider("o")).toThrow(/not found/);
+    });
+    it("maihem apply rejects unknown sections", async () => {
+      expect(await main(["apply", "-f", yaml("providers:\n  z: {kind: ollama}\nfoo: 1\n")])).toBe(1);
+      expect(err.mock.calls[0][0]).toBe('error: apply file: unknown section "foo" (use providers, images)');
+      expect(await main(["apply", "-f", yaml("providers: {}\n")])).toBe(1);
+      expect(await main(["apply", "-f", yaml("- 1\n")])).toBe(1);
+      expect(() => loadProvider("z")).toThrow(/not found/);
+    });
   });
-  it("images prints a table", async () => {
+  it("build, images, inspect and rmi are gone", async () => {
     saveImage(def("a"));
-    expect(await main(["images"])).toBe(0);
-    expect(out()).toMatch(/NAME\s+PROVIDER\s+MODEL\s+SANDBOX\s+TOOLS/);
-    expect(out()).toMatch(/a\s+openai\s+gpt\s+true\s+read,write,edit,list,exec/);
-  });
-  it("inspect prints the image definition", async () => {
-    saveImage(def("a"));
-    expect(await main(["inspect", "a"])).toBe(0);
-    expect(out()).toContain("provider: openai");
+    for (const c of [["build", "-f", file], ["images"], ["inspect", "a"], ["rmi", "a"]]) expect(await main(c)).toBe(1);
+    expect(err.mock.calls[0][0]).toMatch(/^usage/);
+    expect(err.mock.calls[0][0]).not.toMatch(/maihem (build|images|inspect|rmi)\b/);
+    expect(loadImage("a").name).toBe("a");
   });
   describe("provider", () => {
     const add = (...a: string[]) => main(["provider", "add", ...a]);
@@ -122,50 +241,14 @@ describe("main", () => {
       expect(err.mock.calls[0][0]).toMatch(/^error: provider "nope" not found/);
       expect(await main(["provider", "rm"])).toBe(1);
     });
-    const apply = (yaml: string) => { const f = path.join(home, "p.yaml"); fs.writeFileSync(f, yaml); return f; };
-    it("provider apply creates and replaces providers from a file", async () => {
-      saveProvider({ name: "lab", kind: "openai", base_url: "http://old", api_key: "$OLD" });
-      const f = apply("providers:\n  - name: o\n    kind: ollama\n  - name: lab\n    kind: anthropic\n    headers:\n      X: y\n");
-      expect(await main(["provider", "apply", "-f", f])).toBe(0);
-      expect(out()).toBe("created o\nreplaced lab");
-      expect(loadProvider("o")).toEqual({ name: "o", kind: "ollama" });
-      expect(loadProvider("lab")).toEqual({ name: "lab", kind: "anthropic", headers: { X: "y" } });
+    it("image add and run no longer accept --api-key", async () => {
+      saveProvider({ name: "op", kind: "openai" });
+      expect(await main(["image", "add", "--name", "a", "--provider", "op", "--model", "m", "--api-key", "k"])).toBe(1);
+      saveImage(def("a"));
+      expect(await main(["run", "a", "--api-key", "k", "x"])).toBe(1);
+      expect(await main(["launch", "a", "--api-key", "k"])).toBe(1);
+      expect(await main(["run", "a", "--base-url", "http://x", "x"])).toBe(1);
     });
-    it("provider apply saves nothing when one entry is invalid", async () => {
-      const f = apply("providers:\n  - name: o\n    kind: ollama\n  - name: b\n    kind: x\n");
-      expect(await main(["provider", "apply", "--file", f])).toBe(1);
-      expect(() => loadProvider("o")).toThrow(/not found/);
-      expect(await main(["provider", "apply"])).toBe(1);
-    });
-    it("provider apply refuses other flags", async () => {
-      const f = apply("providers:\n  - name: o\n    kind: ollama\n");
-      expect(await main(["provider", "apply", "-f", f, "--name", "z"])).toBe(1);
-      expect(err.mock.calls[0][0]).toMatch(/Unknown option '--name'/);
-      expect(() => loadProvider("o")).toThrow(/not found/);
-    });
-    it("provider apply warns about a plain api_key", async () => {
-      const f = apply("providers:\n  - name: o\n    kind: openai\n    api_key: k\n");
-      expect(await main(["provider", "apply", "-f", f])).toBe(0);
-      expect(err.mock.calls[0][0]).toBe(`warning: api_key for "o" in ${f} is a plain key; use a reference like $OPENAI_API_KEY for files under version control`);
-    });
-    it("provider apply does not warn for an api_key reference", async () => {
-      const f = apply("providers:\n  - name: o\n    kind: openai\n    api_key: Bearer ${K}\n");
-      expect(await main(["provider", "apply", "-f", f])).toBe(0);
-      expect(err).not.toHaveBeenCalled();
-    });
-    it("build and run no longer accept --api-key", async () => {
-      expect(await main(["build", "-f", file, "--api-key", "k"])).toBe(1);
-      expect(await main(["run", "-f", file, "--api-key", "k", "x"])).toBe(1);
-      expect(await main(["launch", "-f", file, "--api-key", "k"])).toBe(1);
-      expect(await main(["run", "--provider", "op", "--model", "m", "--base-url", "http://x", "x"])).toBe(1);
-    });
-  });
-  it("rmi removes image", async () => {
-    saveImage(def("a"));
-    expect(await main(["rmi", "a"])).toBe(0);
-    expect(out()).toBe("removed a");
-    expect(await main(["inspect", "a"])).toBe(1);
-    expect(err.mock.calls[0][0]).toBe("error: no such image: a");
   });
   it("ps lists agents and refreshes status", async () => {
     saveState({ id: "x1", name: "a", pid: 999999, status: "running", workdir: "/w", sandbox: true, started: "2026-01-01T00:00:00.000Z", log: logPath("x1"), sock: sockPath("x1") });
@@ -233,9 +316,9 @@ describe("main", () => {
   });
   it("usage lists launch", async () => {
     expect(await main(["bogus"])).toBe(1);
-    expect(err.mock.calls[0][0]).toMatch(/maihem launch \[NAME \| -f FILE \| --provider P --model M\] \[FIRST_MESSAGE\] \[-d\]/);
+    expect(err.mock.calls[0][0]).toMatch(/maihem launch NAME \[FIRST_MESSAGE\] \[-d\]/);
     expect(err.mock.calls[0][0]).toContain("maihem stop [--discard] ID");
-    expect(err.mock.calls[0][0]).toContain("[TASK] [-d] [--no-sandbox] [--workdir DIR]\n");
+    expect(err.mock.calls[0][0]).toContain("[TASK] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N]\n");
     expect(err.mock.calls[0][0]).not.toContain("--api-key KEY]\n  maihem run");
     expect(err.mock.calls[0][0]).toContain("maihem provider add --name NAME --kind openai|anthropic|ollama");
   });
@@ -243,8 +326,8 @@ describe("main", () => {
     expect(await main(["bogus"])).toBe(1);
     expect(err.mock.calls[0][0]).toMatch(/usage/i);
     expect(await main([])).toBe(1);
-    expect(await main(["inspect"])).toBe(1);
-    expect(await main(["build"])).toBe(1);
+    expect(await main(["image"])).toBe(1);
+    expect(await main(["apply"])).toBe(1);
   });
   it("attach on an exited agent returns 1", async () => {
     saveState({ id: "e1", name: "a", pid: 999999, status: "running", workdir: "/w", sandbox: false, started: "2026-01-01T00:00:00.000Z", log: logPath("e1"), sock: sockPath("e1") });
@@ -264,37 +347,44 @@ describe("main", () => {
   it("attach/logs/__agent without id return usage", async () => {
     for (const c of ["attach", "logs", "__agent"]) expect(await main([c])).toBe(1);
   });
-  it("resolveRunArgs: -f wins over name when both given", () => {
-    saveImage(def("reg"));
-    const r = resolveRunArgs(["reg", "-f", file]);
-    expect(r.def.name).toBe("a");
-  });
-  it("resolveRunArgs: name from positional loads registry", () => {
+  it("run and launch start an image by name", () => {
     saveImage(def("reg"));
     const r = resolveRunArgs(["reg", "do it"]);
-    expect(r.def.name).toBe("reg");
-    expect(r.task).toBe("do it");
-    expect(r.detach).toBe(false);
-    expect(resolveRunArgs(["--name", "reg", "task2"]).task).toBe("task2");
+    expect(r).toMatchObject({ def: { name: "reg" }, task: "do it", detach: false });
+    expect(resolveRunArgs(["-d", "reg"])).toMatchObject({ task: undefined, detach: true });
   });
-  it("resolveRunArgs: inline flags build a definition", () => {
-    const r = resolveRunArgs(["--provider", "ollama", "--model", "m", "-d", "hello"]);
-    expect(r.def).toMatchObject({ name: "inline", provider: "ollama", model: "m" });
-    expect(r.task).toBe("hello");
-    expect(r.detach).toBe(true);
+  it("run and launch without a name fail with a hint", async () => {
+    expect(await main(["run"])).toBe(1);
+    expect(err.mock.calls[0][0]).toBe("error: run needs an image name: maihem run NAME [TASK]");
+    expect(await main(["launch", "-d"])).toBe(1);
+    expect(err.mock.calls[1][0]).toBe("error: launch needs an image name: maihem launch NAME [FIRST_MESSAGE]");
   });
-  it("resolveRunArgs: task positional captured in both forms", () => {
-    expect(resolveRunArgs(["-f", file, "t1"]).task).toBe("t1");
-    expect(resolveRunArgs(["-f", file]).task).toBeUndefined();
+  it("an unknown image name fails with the add hint", async () => {
+    expect(await main(["run", "x", "t"])).toBe(1);
+    expect(err.mock.calls[0][0]).toBe("error: no such image: x; add it: maihem image add --name x … or maihem apply -f FILE");
   });
-  it("resolveRunArgs: --no-sandbox and --workdir override", () => {
-    const r = resolveRunArgs(["-f", file, "--no-sandbox", "--workdir", "sub"]);
+  it("run and launch reject -f, --name and inline flags", async () => {
+    saveImage(def("reg"));
+    for (const c of ["run", "launch"])
+      for (const f of [["-f", file], ["--name", "reg"], ["--provider", "op"], ["--model", "m"], ["--system", "s"], ["--tools", "read"]]) {
+        err.mockClear();
+        expect(await main([c, "reg", ...f, "x"])).toBe(1);
+        expect(err.mock.calls[0][0]).toMatch(/Unknown option/);
+      }
+  });
+  it("--max-steps overrides the image for one run without changing it", () => {
+    saveImage(def("reg"));
+    expect(resolveRunArgs(["reg", "--max-steps", "3"]).def.max_steps).toBe(3);
+    expect(loadImage("reg").max_steps).toBe(50);
+    for (const n of ["0", "x", "1.5"]) expect(() => resolveRunArgs(["reg", "--max-steps", n])).toThrow("definition: max_steps must be a positive integer");
+  });
+  it("--no-sandbox and --workdir still apply", () => {
+    saveImage(def("reg"));
+    const r = resolveRunArgs(["reg", "--no-sandbox", "--workdir", "sub"]);
     expect(r.def.sandbox).toBe(false);
     expect(r.def.workdir).toBe(path.resolve("sub"));
-    expect(resolveRunArgs(["-f", file]).def.workdir).toBe(process.cwd());
-  });
-  it("resolveRunArgs: missing source returns usage error", () => {
-    expect(() => resolveRunArgs([])).toThrow(/usage/i);
+    expect(loadImage("reg").sandbox).toBe(true);
+    expect(resolveRunArgs(["reg"]).def.workdir).toBe(process.cwd());
   });
   describe("prune", () => {
     const agent = (id: string, pid: number, sandbox = false) =>

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { home } from "./registry.ts";
-import { maskKey } from "./definition.ts";
+import { checkEntries, isMap, maskKey } from "./definition.ts";
 
 export const KINDS = ["openai", "anthropic", "ollama"] as const;
 export type Kind = (typeof KINDS)[number];
@@ -20,24 +20,12 @@ export function validateProvider(p: Provider): Provider {
 }
 
 const FIELDS = ["name", "kind", "base_url", "api_key", "headers"];
-const isMap = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 
-export function parseProviders(text: string): Provider[] {
-  const doc: unknown = YAML.parse(text);
-  if (!isMap(doc) || !Array.isArray(doc.providers) || !doc.providers.length) throw new Error('providers file: expected a "providers:" list');
-  const seen = new Set<string>();
-  return doc.providers.map((p: unknown) => {
-    if (!isMap(p)) throw new Error("providers file: each provider must be a map");
-    const bad = Object.keys(p).find((k) => !FIELDS.includes(k));
-    if (bad) throw new Error(`providers file: unknown field "${bad}" in provider "${p.name}"`);
-    if (p.headers !== undefined && (!isMap(p.headers) || Object.values(p.headers).some((v) => typeof v !== "string")))
-      throw new Error(`providers file: headers in provider "${p.name}" must map strings to strings`);
-    const v = validateProvider(p as unknown as Provider);
-    if (seen.has(v.name)) throw new Error(`providers file: duplicate provider "${v.name}"`);
-    seen.add(v.name);
-    return v;
-  });
-}
+export const checkProviders = (sec: unknown): Provider[] => checkEntries("provider", sec, FIELDS, (p) => {
+  if (p.headers !== undefined && (!isMap(p.headers) || Object.values(p.headers).some((v) => typeof v !== "string")))
+    throw new Error(`apply file: headers in provider "${p.name}" must map strings to strings`);
+  return validateProvider(p as unknown as Provider);
+});
 
 export function saveProvider(p: Provider): void {
   validateProvider(p);

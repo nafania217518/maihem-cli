@@ -1,0 +1,37 @@
+# Load with: maihem apply -f examples/stack.yaml
+# The anthropic and openai images need ANTHROPIC_API_KEY / OPENAI_API_KEY at run time.
+providers:
+  ollama:
+    kind: ollama
+  anthropic:
+    kind: anthropic
+  openai:
+    kind: openai
+images:
+  local-helper:
+    provider: ollama
+    model: qwen3.5:9b-mlx
+    system: |
+      You are a helpful assistant working in a directory.
+      Use the tools to do what the user asks. Then say what you did.
+    tools: [read, write, edit, list, exec]
+    sandbox: true
+    max_steps: 30
+    reasoning: low
+    context: 32000
+  reviewer:
+    provider: anthropic
+    model: claude-sonnet-5-5
+    system: |
+      You review code. Read files, run checks with exec, and report findings.
+      Do not change files unless asked.
+    tools: [read, list, exec]
+    sandbox: true
+    max_steps: 50
+  writer:
+    provider: openai
+    model: gpt-6-luna
+    system: You write and edit documents in the working directory.
+    tools: [read, write, edit, list]
+    sandbox: false
+    max_steps: 40

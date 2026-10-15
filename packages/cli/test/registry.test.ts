@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { saveImage, listImages, loadImage, removeImage } from "../src/registry.ts";
+import { saveImage, listImages, loadImage, removeImage, checkImages } from "../src/registry.ts";
 import { parseDefinition } from "../src/definition.ts";
 
 const def = (name: string) => parseDefinition(JSON.stringify({ name, provider: "openai", model: "gpt" }));
@@ -37,6 +37,12 @@ describe("registry", () => {
     expect(listImages()).toEqual([]);
   });
   it("loadImage throws for missing", () => {
-    expect(() => loadImage("nope")).toThrow("no such image: nope");
+    expect(() => loadImage("nope")).toThrow("no such image: nope; add it: maihem image add --name nope … or maihem apply -f FILE");
+  });
+  it("checkImages reads a map keyed by name, rejects unknown fields, and keeps the base_url hint", () => {
+    expect(checkImages({ a: { provider: "p", model: "m", max_steps: 3 }, b: { provider: "p", model: "m" } }).map((d) => [d.name, d.max_steps])).toEqual([["a", 3], ["b", 50]]);
+    expect(() => checkImages({ a: { provider: "p", model: "m", foo: 1 } })).toThrow('apply file: unknown field "foo" in image "a"');
+    expect(() => checkImages({ a: { provider: "p", model: "m", base_url: "x" } })).toThrow('definition: "base_url" moved to providers');
+    expect(() => checkImages({ a: { provider: "p", model: "m", max_steps: 0 } })).toThrow("definition: max_steps must be a positive integer");
   });
 });

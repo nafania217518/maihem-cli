@@ -33,29 +33,28 @@ rm -rf ~/.maihem                # optional: delete images, providers, agent stat
 ## Quick start
 
 ```bash
-# register a provider once (see Providers)
-maihem provider add --name ollama --kind ollama
-maihem provider add --name anthropic --kind anthropic   # key from ANTHROPIC_API_KEY
+# load the example providers and images (local-helper, reviewer, writer)
+maihem apply -f examples/stack.yaml
 
 # one-shot task, sandboxed, in the current git repo
-maihem run -f examples/ollama.yaml "summarise README.md into SUMMARY.md"
+maihem run local-helper "summarise README.md into SUMMARY.md"
 
 # same, but with real bash and real files in the current directory
-maihem run --no-sandbox -f examples/ollama.yaml "run the tests and fix the failing one"
+maihem run --no-sandbox local-helper "run the tests and fix the failing one"
 
 # task from a pipe
-cat task.md | maihem run -f examples/ollama.yaml
+cat task.md | maihem run local-helper
 
 # chain agents: a piped run writes only its final answer to stdout
-echo "write a haiku about pipes" | maihem run -f examples/ollama.yaml | maihem run -f examples/ollama.yaml
+echo "write a haiku about pipes" | maihem run local-helper | maihem run local-helper
 
 # task in the background; the agent stops itself when the task ends
-maihem run -d -f examples/ollama.yaml "add tests for src/util.ts"
+maihem run -d local-helper "add tests for src/util.ts"
 maihem attach <id>        # read-only view while the task runs
 
-# chat with an agent; the first message is optional
-maihem launch -f examples/anthropic.yaml "review the last commit"
-maihem launch -d reviewer # start it without opening the chat
+# chat with an agent; the first message is optional (reviewer needs ANTHROPIC_API_KEY)
+maihem launch reviewer "review the last commit"
+maihem launch -d reviewer             # start it without opening the chat
 maihem ps
 maihem --version
 maihem attach <id>
@@ -140,25 +139,9 @@ maihem provider rm lab                  # refuses while an image uses it; -f for
 
 To read a value from the env at run time, put it in single quotes: `--api-key '$OPENAI_API_KEY'`. Without quotes, the shell inlines the value, and the key is stored in plain text.
 
-Load providers from a file. `apply` creates each provider, or replaces it fully if it exists.
+Providers can also come from a file; see "One file for everything" below.
 
-```yaml
-providers:
-  - name: ollama
-    kind: ollama
-  - name: lab
-    kind: openai
-    base_url: http://gpu-box:8000/v1
-    api_key: $LAB_KEY
-    headers:
-      X-Team: infra
-```
-
-```bash
-maihem provider apply -f providers.yaml
-```
-
-A plain `api_key` in the file works but prints a warning; use a reference like `$LAB_KEY` instead.
+A plain `api_key` in an apply file works but prints a warning; use a reference like `$LAB_KEY` instead.
 
 | Setting | Meaning |
 |---|---|
@@ -172,18 +155,50 @@ A plain `api_key` in the file works but prints a warning; use a reference like `
 - An unset referenced env var fails the run and names the var.
 - Images store only the provider name. A `provider update` applies to every image at its next run. A running agent keeps the settings it started with.
 
-## Registry
+## Images
+
+An image is a stored definition. `run` and `launch` start an agent from it by name.
 
 ```bash
-maihem build -f examples/anthropic.yaml   # store under its name
-maihem images
-maihem inspect reviewer
+maihem image add --name reviewer --provider anthropic --model claude-sonnet-5-5 --tools read,list --max-steps 30
+maihem image update reviewer --reasoning medium --no-sandbox
+maihem image update reviewer --unset sandbox   # repeatable; the default applies again
+maihem image ls
+maihem image inspect reviewer
 maihem run reviewer "review the last commit"
-maihem rmi reviewer
+maihem image rm reviewer
 ```
 
-`run` and `launch` accept three sources: `-f FILE`, a registry `NAME`, or inline flags
-`--provider NAME --model M [--system S] [--tools a,b]`, where NAME is a registered provider.
+- The provider must exist. `add` and `update` fail with the `maihem provider add` command to fix it.
+- `update --unset FIELD` removes the field. The definition default applies again.
+- A running agent keeps a copy of its image. `image rm` does not affect it.
+
+`run` and `launch` start an image by name. Add images with `maihem image add` or `maihem apply -f FILE`. Run-time options: `-d`, `--no-sandbox`, `--workdir DIR`, `--max-steps N`; they do not change the image.
+
+### One file for everything
+
+`maihem apply -f FILE` reads a `providers:` map and an `images:` map. Both are optional, but one must have entries.
+Each key is the name; its value holds the settings.
+It creates each entry, or replaces it fully if it exists. It checks all entries before it saves one.
+It saves the providers first, then the images. An image can use a provider from the same file.
+Unknown fields are errors.
+
+```yaml
+providers:
+  ollama:
+    kind: ollama
+images:
+  local-helper:
+    provider: ollama
+    model: qwen3.5:9b-mlx
+    tools: [read, write, edit, list, exec]
+    max_steps: 30
+```
+
+```bash
+maihem apply -f examples/stack.yaml
+maihem launch local-helper
+```
 
 ## Sandbox mode
 

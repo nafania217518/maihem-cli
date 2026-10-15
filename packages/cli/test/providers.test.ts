@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { saveProvider, loadProvider, listProviders, removeProvider, resolveProvider, maskProvider, parseProviders } from "../src/providers.ts";
+import { saveProvider, loadProvider, listProviders, removeProvider, resolveProvider, maskProvider, checkProviders } from "../src/providers.ts";
 import type { Provider } from "../src/providers.ts";
 
 describe("providers", () => {
@@ -68,9 +68,6 @@ describe("providers", () => {
     expect(maskProvider({ name: "a", kind: "openai", api_key: "$K", headers: { A: "${T}", B: "$$secret1234", C: "Bearer ${T}" } }))
       .toEqual({ name: "a", kind: "openai", api_key: "$K", headers: { A: "${T}", B: "****1234", C: "****${T}" } });
   });
-  it("api_key_env is an unknown field in a providers file", () => {
-    expect(() => parseProviders("providers:\n  - name: a\n    kind: openai\n    api_key_env: V\n")).toThrow('providers file: unknown field "api_key_env" in provider "a"');
-  });
   it("list returns providers sorted by name and remove deletes one", () => {
     expect(listProviders()).toEqual([]);
     saveProvider({ name: "z", kind: "ollama" });
@@ -80,22 +77,12 @@ describe("providers", () => {
     expect(listProviders().map((p) => p.name)).toEqual(["z"]);
     expect(() => removeProvider("a")).toThrow(/not found/);
   });
-  it("parseProviders reads a providers list", () => {
-    expect(parseProviders("providers:\n  - name: o\n    kind: ollama\n  - name: lab\n    kind: openai\n    base_url: http://x\n    api_key: $K\n    headers:\n      X-Team: infra\n"))
-      .toEqual([{ name: "o", kind: "ollama" }, { name: "lab", kind: "openai", base_url: "http://x", api_key: "$K", headers: { "X-Team": "infra" } }]);
-    expect(parseProviders('{"providers":[{"name":"a","kind":"openai"}]}')).toEqual([{ name: "a", kind: "openai" }]);
-  });
-  it("parseProviders rejects a file without a providers list", () => {
-    for (const t of ["", "- a", "providers: []", "providers: x", "other: 1"]) expect(() => parseProviders(t)).toThrow('providers file: expected a "providers:" list');
-  });
-  it("parseProviders rejects unknown fields, bad headers and duplicate names", () => {
-    expect(() => parseProviders("providers:\n  - name: a\n    kind: openai\n    model: m\n")).toThrow('providers file: unknown field "model" in provider "a"');
-    expect(() => parseProviders("providers:\n  - x\n")).toThrow("providers file: each provider must be a map");
-    expect(() => parseProviders("providers:\n  - name: a\n    kind: openai\n    headers: [1]\n")).toThrow('providers file: headers in provider "a" must map strings to strings');
-    expect(() => parseProviders("providers:\n  - name: a\n    kind: openai\n    headers:\n      X: 1\n")).toThrow('providers file: headers in provider "a" must map strings to strings');
-    expect(() => parseProviders("providers:\n  - name: a\n    kind: openai\n  - name: a\n    kind: ollama\n")).toThrow('providers file: duplicate provider "a"');
-  });
-  it("parseProviders validates every entry", () => {
-    expect(() => parseProviders("providers:\n  - name: a\n    kind: openai\n  - name: b\n    kind: x\n")).toThrow('provider: unknown kind "x"');
+  it("checkProviders reads a map keyed by name and rejects unknown fields and bad headers", () => {
+    expect(checkProviders({ o: { kind: "ollama" }, lab: { kind: "openai", headers: { X: "y" } } }))
+      .toEqual([{ name: "o", kind: "ollama" }, { name: "lab", kind: "openai", headers: { X: "y" } }]);
+    expect(() => checkProviders({ a: { kind: "openai", api_key_env: "V" } })).toThrow('apply file: unknown field "api_key_env" in provider "a"');
+    expect(() => checkProviders({ a: { kind: "openai", headers: [1] } })).toThrow('apply file: headers in provider "a" must map strings to strings');
+    expect(() => checkProviders({ a: { kind: "openai", headers: { X: 1 } } })).toThrow('apply file: headers in provider "a" must map strings to strings');
+    expect(() => checkProviders({ a: { kind: "x" } })).toThrow('provider: unknown kind "x"');
   });
 });

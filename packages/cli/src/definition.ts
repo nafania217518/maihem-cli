@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import YAML from "yaml";
 
 export const TOOLS = ["read", "write", "edit", "list", "exec"] as const;
@@ -20,11 +19,11 @@ export interface Definition {
   compact_at: number;
 }
 
-function splitTools(s: string): string[] {
+export function splitTools(s: string): string[] {
   return s.split(",").map((t) => t.trim()).filter(Boolean);
 }
 
-function validate(raw: Record<string, unknown>): Definition {
+export function validate(raw: Record<string, unknown>): Definition {
   for (const k of ["name", "provider", "model"]) {
     if (typeof raw[k] !== "string" || !raw[k]) throw new Error(`definition: "${k}" is required`);
   }
@@ -60,25 +59,32 @@ function validate(raw: Record<string, unknown>): Definition {
   return d;
 }
 
+export const FIELDS = ["name", "provider", "model", "system", "tools", "sandbox", "workdir", "max_steps", "reasoning", "context", "on_context_full", "compact_at"];
+export const isMap = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
+
+// Checks an apply-file section: a map of name: settings, known fields only.
+export function checkEntries<T>(kind: string, sec: unknown, fields: string[], check: (e: Record<string, unknown>) => T): T[] {
+  if (!isMap(sec)) throw new Error(`apply file: "${kind}s" must be a map of name: settings`);
+  return Object.entries(sec).map(([name, e]) => {
+    if (!isMap(e)) throw new Error(`apply file: ${kind} "${name}" must be a map`);
+    if ("name" in e) throw new Error(`apply file: unknown field "name" in ${kind} "${name}" (the key is the name)`);
+    const bad = Object.keys(e).find((k) => !fields.includes(k));
+    if (bad) throw new Error(`apply file: unknown field "${bad}" in ${kind} "${name}"`);
+    return check({ ...e, name });
+  });
+}
+
 export function parseDefinition(text: string): Definition {
   const raw = YAML.parse(text);
   if (!raw || typeof raw !== "object") throw new Error("definition: expected a YAML or JSON object");
   return validate(raw);
 }
 
-export function loadDefinition(file: string): Definition {
-  return parseDefinition(fs.readFileSync(file, "utf8"));
-}
-
-export function definitionFromFlags(f: { provider?: string; model?: string; system?: string; tools?: string }): Definition {
-  return validate({ name: "inline", provider: f.provider, model: f.model, system: f.system, tools: f.tools ? splitTools(f.tools) : undefined });
-}
-
-export function applyOverrides(def: Definition, o: { sandbox?: boolean; workdir?: string; tools?: string }): Definition {
-  const d = { ...def, tools: [...def.tools] };
+export function applyOverrides(def: Definition, o: { sandbox?: boolean; workdir?: string; max_steps?: number }): Definition {
+  const d = { ...def };
   if (o.sandbox !== undefined) d.sandbox = o.sandbox;
   if (o.workdir !== undefined) d.workdir = o.workdir;
-  if (o.tools !== undefined) d.tools = validate({ ...def, tools: splitTools(o.tools) }).tools;
+  if (o.max_steps !== undefined) d.max_steps = validate({ ...def, max_steps: o.max_steps }).max_steps;
   return d;
 }
 
