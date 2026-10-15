@@ -37,7 +37,7 @@ describe("definition", () => {
     expect(() => parseDefinition(JSON.stringify({ ...base, max_steps: 0 }))).toThrow(/max_steps/);
     expect(() => parseDefinition("just a string")).toThrow();
   });
-  it("a stored image ignores an old workdir key", () => {
+  it("a stored definition ignores an old workdir key", () => {
     expect(parseDefinition("name: a\nprovider: p\nmodel: m\nworkdir: /old\n").workdir).toBeUndefined();
   });
 

@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import YAML from "yaml";
 import { applyOverrides, isMap, splitTools, validate } from "./definition.ts";
 import type { Definition } from "./definition.ts";
-import { checkImages, listImages, loadImage, removeImage, saveImage } from "./registry.ts";
+import { checkDefinitions, listDefinitions, loadDefinition, removeDefinition, saveDefinition } from "./registry.ts";
 import { isAlive, listStates, loadState, refresh, removeState, saveState } from "./state.ts";
 import { ensureWorker, startWorker, stopWorker, workerStatus } from "./worker.ts";
 import { removeWorkspace } from "./backend-sandbox.ts";
@@ -19,12 +19,12 @@ import { checkProviders, listProviders, loadProvider, maskProvider, removeProvid
 import type { Kind, Provider } from "./providers.ts";
 
 const USAGE = `usage:
-  maihem image add --name N --provider P --model M [--system S] [--tools a,b] [--no-sandbox] [--max-steps N]
+  maihem definition add --name N --provider P --model M [--system S] [--tools a,b] [--no-sandbox] [--max-steps N]
       [--reasoning LEVEL] [--context N] [--on-context-full compact|fail] [--compact-at X]
-  maihem image update NAME [same flags except --name] [--unset FIELD]...
-  maihem image rm NAME
-  maihem image ls
-  maihem image inspect NAME
+  maihem definition update NAME [same flags except --name] [--unset FIELD]...
+  maihem definition rm NAME
+  maihem definition ls
+  maihem definition inspect NAME
   maihem apply -f FILE
   maihem run NAME [TASK] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N] [--allow-empty]
   maihem launch NAME [FIRST_MESSAGE] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N]
@@ -53,8 +53,8 @@ export interface RunArgs { def: Definition; task?: string; detach: boolean; allo
 
 export function resolveRunArgs(argv: string[], cmd = "run"): RunArgs {
   const { values: v, positionals: [name, task] } = parseArgs({ args: argv, options: cmd === "run" ? RUN_ONLY : RUN_OPTIONS, allowPositionals: true });
-  if (!name) throw new Error(cmd === "run" ? "run needs an image name: maihem run NAME [TASK]" : "launch needs an image name: maihem launch NAME [FIRST_MESSAGE]");
-  const def = applyOverrides(loadImage(name), {
+  if (!name) throw new Error(cmd === "run" ? "run needs a definition name: maihem run NAME [TASK]" : "launch needs a definition name: maihem launch NAME [FIRST_MESSAGE]");
+  const def = applyOverrides(loadDefinition(name), {
     sandbox: v["no-sandbox"] ? false : undefined,
     workdir: path.resolve(v.workdir ?? process.cwd()),
     max_steps: v["max-steps"] === undefined ? undefined : Number(v["max-steps"]),
@@ -101,12 +101,12 @@ const keyLabel = (p: Provider): string => p.api_key ? (/^\$(?!\$)/.test(p.api_ke
 
 const fileArg = (args: string[]): string | undefined => parseArgs({ args, options: { file: { type: "string", short: "f" } } }).values.file;
 
-// Validates everything first (image providers come from `ps` or the registry), then saves providers, then images.
+// Validates everything first (definition providers come from `ps` or the registry), then saves providers, then definitions.
 function applyAll(file: string, ps: Provider[], ds: Definition[]): void {
   const given = new Set(ps.map((p) => p.name));
   for (const d of ds) if (!given.has(d.provider)) loadProvider(d.provider);
   const oldP = new Set(listProviders().map((p) => p.name));
-  const oldI = new Set(listImages().map((d) => d.name));
+  const oldD = new Set(listDefinitions().map((d) => d.name));
   const say = (old: Set<string>, kind: string, name: string) => console.log(`${old.has(name) ? "replaced" : "created"} ${kind} ${name}`);
   for (const p of ps) {
     if (p.api_key !== undefined && !/\$(\{[A-Za-z_]|[A-Za-z_])/.test(p.api_key.replaceAll("$$", ""))) console.error(`warning: api_key for "${p.name}" in ${file} is a plain key; use a reference like $OPENAI_API_KEY for files under version control`);
@@ -114,32 +114,32 @@ function applyAll(file: string, ps: Provider[], ds: Definition[]): void {
     say(oldP, "provider", p.name);
   }
   for (const d of ds) {
-    saveImage(d);
-    say(oldI, "image", d.name);
+    saveDefinition(d);
+    say(oldD, "definition", d.name);
   }
 }
 
 function applyStack(file: string): void {
   const doc: unknown = YAML.parse(fs.readFileSync(file, "utf8"));
-  if (!isMap(doc)) throw new Error("apply file: expected a providers and/or images map");
-  const bad = Object.keys(doc).find((k) => k !== "providers" && k !== "images");
-  if (bad) throw new Error(`apply file: unknown section "${bad}" (use providers, images)`);
-  const ps = checkProviders(doc.providers ?? {}), ds = checkImages(doc.images ?? {});
-  if (!ps.length && !ds.length) throw new Error("apply file: expected a providers and/or images map");
+  if (!isMap(doc)) throw new Error("apply file: expected a providers and/or definitions map");
+  const bad = Object.keys(doc).find((k) => k !== "providers" && k !== "definitions");
+  if (bad) throw new Error(`apply file: unknown section "${bad}" (use providers, definitions)`);
+  const ps = checkProviders(doc.providers ?? {}), ds = checkDefinitions(doc.definitions ?? {});
+  if (!ps.length && !ds.length) throw new Error("apply file: expected a providers and/or definitions map");
   applyAll(file, ps, ds);
 }
 
-const IMAGE_OPTIONS = {
+const DEF_OPTIONS = {
   name: { type: "string" }, provider: { type: "string" }, model: { type: "string" }, system: { type: "string" }, tools: { type: "string" },
   "no-sandbox": { type: "boolean" }, "max-steps": { type: "string" }, reasoning: { type: "string" }, context: { type: "string" },
   "on-context-full": { type: "string" }, "compact-at": { type: "string" }, unset: { type: "string", multiple: true },
 } as const;
-const IMAGE_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at"];
+const DEF_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at"];
 
-function image(argv: string[]): boolean {
+function definition(argv: string[]): boolean {
   const [sub, ...args] = argv;
   if (!["add", "update", "rm", "ls", "inspect"].includes(sub)) return false;
-  const { values: v, positionals: [name] } = parseArgs({ args, options: IMAGE_OPTIONS, allowPositionals: true });
+  const { values: v, positionals: [name] } = parseArgs({ args, options: DEF_OPTIONS, allowPositionals: true });
   const save = (raw: Record<string, unknown>): void => {
     for (const k of ["provider", "model", "system", "reasoning"] as const) if (v[k] !== undefined) raw[k] = v[k];
     if (v["on-context-full"] !== undefined) raw.on_context_full = v["on-context-full"];
@@ -147,28 +147,28 @@ function image(argv: string[]): boolean {
     if (v["no-sandbox"]) raw.sandbox = false;
     for (const [f, k] of [["max-steps", "max_steps"], ["context", "context"], ["compact-at", "compact_at"]] as const) if (v[f] !== undefined) raw[k] = Number(v[f]);
     for (const f of v.unset ?? []) {
-      if (!IMAGE_UNSET.includes(f)) throw new Error(`image: --unset takes ${IMAGE_UNSET.join(", ")}`);
+      if (!DEF_UNSET.includes(f)) throw new Error(`definition: --unset takes ${DEF_UNSET.join(", ")}`);
       delete raw[f];
     }
     const d = validate(raw);
     loadProvider(d.provider);
-    saveImage(d);
+    saveDefinition(d);
   };
   if (sub === "add") {
     if (!v.name || !v.provider || !v.model) return false;
-    if (listImages().some((d) => d.name === v.name)) throw new Error(`image "${v.name}" already exists; use maihem image update ${v.name}`);
+    if (listDefinitions().some((d) => d.name === v.name)) throw new Error(`definition "${v.name}" already exists; use maihem definition update ${v.name}`);
     save({ name: v.name });
     console.log(`added ${v.name}`);
   } else if (sub === "update" && name) {
-    save({ ...loadImage(name) });
+    save({ ...loadDefinition(name) });
     console.log(`updated ${name}`);
   } else if (sub === "rm" && name) {
-    removeImage(name);
+    removeDefinition(name);
     console.log(`removed ${name}`);
   } else if (sub === "ls") {
-    for (const l of pad([["NAME", "PROVIDER", "MODEL", "SANDBOX", "TOOLS"], ...listImages().map((d) => [d.name, d.provider, d.model, String(d.sandbox), d.tools.join(",")])])) console.log(l);
+    for (const l of pad([["NAME", "PROVIDER", "MODEL", "SANDBOX", "TOOLS"], ...listDefinitions().map((d) => [d.name, d.provider, d.model, String(d.sandbox), d.tools.join(",")])])) console.log(l);
   } else if (sub === "inspect" && name) {
-    console.log(YAML.stringify(loadImage(name)));
+    console.log(YAML.stringify(loadDefinition(name)));
   } else return false;
   return true;
 }
@@ -201,8 +201,8 @@ function provider(argv: string[]): boolean {
     console.log(`updated ${name}`);
   } else if (sub === "rm" && name) {
     loadProvider(name);
-    const users = listImages().filter((d) => d.provider === name).map((d) => d.name);
-    if (users.length && !v.force) throw new Error(`provider "${name}" is used by images: ${users.join(", ")}; use -f to remove it anyway`);
+    const users = listDefinitions().filter((d) => d.provider === name).map((d) => d.name);
+    if (users.length && !v.force) throw new Error(`provider "${name}" is used by definitions: ${users.join(", ")}; use -f to remove it anyway`);
     removeProvider(name);
     console.log(`removed ${name}`);
   } else if (sub === "ls") {
@@ -239,8 +239,8 @@ export async function main(argv: string[]): Promise<number> {
       case "-v":
         console.log(VERSION);
         return 0;
-      case "image":
-        if (!image(rest)) break;
+      case "definition":
+        if (!definition(rest)) break;
         return 0;
       case "apply": {
         const file = fileArg(rest);

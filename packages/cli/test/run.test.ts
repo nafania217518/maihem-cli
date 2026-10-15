@@ -11,10 +11,10 @@ import { Readable } from "node:stream";
 import { deps, launchCommand, printEvent, runFile } from "../src/run.ts";
 import { resolveRunArgs } from "../src/main.ts";
 import { saveProvider } from "../src/providers.ts";
-import { saveImage } from "../src/registry.ts";
+import { saveDefinition } from "../src/registry.ts";
 import { parseDefinition } from "../src/definition.ts";
 
-const image = (name: string, provider: string) => saveImage(parseDefinition(JSON.stringify({ name, provider, model: "m" })));
+const definition = (name: string, provider: string) => saveDefinition(parseDefinition(JSON.stringify({ name, provider, model: "m" })));
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
 const stream = (chunks: LanguageModelV4StreamPart[]) => ({ stream: simulateReadableStream({ chunks }) });
@@ -44,7 +44,7 @@ describe("run", () => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "mh-"));
     process.env.MAIHEM_HOME = home;
     saveProvider({ name: "t", kind: "openai", api_key: "k" });
-    image("img", "t");
+    definition("img", "t");
     work = fs.mkdtempSync(path.join(os.tmpdir(), "wd-"));
     out = ""; err = "";
     vi.spyOn(process.stdout, "write").mockImplementation((s) => { out += s; return true; });
@@ -248,12 +248,12 @@ describe("run", () => {
   it("missing key returns 1", async () => {
     delete process.env.OPENAI_API_KEY;
     saveProvider({ name: "nokey", kind: "openai" });
-    image("nokey", "nokey");
+    definition("nokey", "nokey");
     expect(await main(["run", "nokey", "--no-sandbox", "x"])).toBe(1);
     expect(err).toMatch(/error: no API key for provider "nokey"/);
   });
   it("run with an unknown provider fails before spawning", async () => {
-    image("nope", "nope");
+    definition("nope", "nope");
     const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
     expect(await main(["run", "nope", "--no-sandbox", "-d", "x"])).toBe(1);
     expect(err).toMatch(/provider "nope" not found/);

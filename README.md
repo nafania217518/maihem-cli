@@ -3,8 +3,8 @@
 Multiple Agent In Harness Execution Manager. A CLI that runs AI agents the way Docker runs containers.
 
 - A **provider** holds the connection to a model API: kind, endpoint, key.
-- An **image** is a stored agent definition: provider, model, prompt, tools, limits.
-- An **agent** is a running instance of an image, like a container.
+- A **definition** is a stored agent configuration: provider, model, prompt, tools, limits.
+- An **agent** is a running instance of a definition, like a container.
 - The agent loop runs on your machine. Its sandbox is a [cloudflare/computer](https://github.com/cloudflare/computer) workspace: a durable filesystem plus a `just-bash` shell inside a local `wrangler dev` worker. No Docker needed.
 
 ## Requirements
@@ -29,13 +29,13 @@ maihem --version
 maihem ps                       # stop running agents first: maihem stop <id>
 maihem worker stop              # stop the sandbox worker, if it runs
 npm uninstall -g @maihem/cli    # removes `maihem` from PATH
-rm -rf ~/.maihem                # optional: delete images, providers, agent state and logs
+rm -rf ~/.maihem                # optional: delete definitions, providers, agent state and logs
 ```
 
 ## Quick start
 
 ```bash
-# load the example providers and images (local-helper, reviewer, writer, translator)
+# load the example providers and definitions (local-helper, reviewer, writer, translator)
 maihem apply -f examples/stack.yaml
 
 # one-shot task, sandboxed, in the current git repo
@@ -69,7 +69,7 @@ maihem prune                    # remove stopped agents and their data
 
 ## Providers
 
-A provider holds the connection settings. Images refer to it by name.
+A provider holds the connection settings. Definitions refer to it by name.
 
 ```bash
 maihem provider add --name ollama --kind ollama
@@ -79,7 +79,7 @@ maihem provider update lab --header 'Authorization=Bearer ${LAB_TOKEN}'
 maihem provider update lab --unset base_url     # repeatable; base_url | api_key | headers
 maihem provider ls
 maihem provider inspect work                    # plain keys and header values are masked
-maihem provider rm lab                          # refuses while an image uses it; -f forces
+maihem provider rm lab                          # refuses while a definition uses it; -f forces
 ```
 
 | Option | Meaning |
@@ -92,19 +92,19 @@ maihem provider rm lab                          # refuses while an image uses it
 - References: `$VAR` or `${VAR}` in `--api-key` and `--header` values reads the env var at run time. `$$` is a literal `$`. An unset var fails the run and names it.
 - To store a reference, put it in single quotes: `--api-key '$OPENAI_API_KEY'`. Without quotes, the shell inlines the value, and the key is stored in plain text.
 - Without `--api-key`, the key comes from `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Ollama needs no key.
-- Images store only the provider name. A `provider update` applies to every image at its next run.
+- Definitions store only the provider name. A `provider update` applies to every definition at its next run.
 
-## Images
+## Definitions
 
-An image is a stored agent definition. `run` and `launch` start an agent from it by name.
+A definition is a stored agent configuration. `run` and `launch` start an agent from it by name.
 
 ```bash
-maihem image add --name reviewer --provider anthropic --model claude-sonnet-5-5 --tools read,list --max-steps 30
-maihem image update reviewer --reasoning medium --no-sandbox
-maihem image update reviewer --unset sandbox    # repeatable; the default applies again
-maihem image ls
-maihem image inspect reviewer
-maihem image rm reviewer
+maihem definition add --name reviewer --provider anthropic --model claude-sonnet-5-5 --tools read,list --max-steps 30
+maihem definition update reviewer --reasoning medium --no-sandbox
+maihem definition update reviewer --unset sandbox # repeatable; the default applies again
+maihem definition ls
+maihem definition inspect reviewer
+maihem definition rm reviewer
 ```
 
 - `add` and `update` take one option per field (see the reference below): `--system`, `--tools a,b`, `--no-sandbox`, `--max-steps`, `--reasoning`, `--context`, `--on-context-full`, `--compact-at`.
@@ -120,16 +120,16 @@ maihem image rm reviewer
 | `list` | List a directory (`ls -la`) |
 | `exec` | Run a shell command. In the sandbox, the shell is `just-bash` (see Sandbox mode). |
 
-An image without `tools` gets all five. Paths are relative to the working directory (`/workspace` in the sandbox).
+A definition without `tools` gets all five. Paths are relative to the working directory (`/workspace` in the sandbox).
 
 ## Configuration file
 
-`maihem apply -f FILE` loads providers and images from one YAML or JSON file:
+`maihem apply -f FILE` loads providers and definitions from one YAML or JSON file:
 
-- `providers:` and `images:` are maps. Each key is the name; its value holds the settings. Both maps are optional, but one must have entries.
+- `providers:` and `definitions:` are maps. Each key is the name; its value holds the settings. Both maps are optional, but one must have entries.
 - `apply` creates each entry, or replaces it fully if it exists.
 - It checks all entries before it saves one. Unknown fields are errors.
-- It saves the providers first, then the images. An image can use a provider from the same file.
+- It saves the providers first, then the definitions. A definition can use a provider from the same file.
 - A plain `api_key` works but prints a warning. Use a reference like `$LAB_KEY` in files under version control.
 
 Every field, with its default:
@@ -143,7 +143,7 @@ providers:
     headers:                      # optional; values may hold $VAR references
       X-Team: infra
 
-images:
+definitions:
   reviewer:
     provider: lab                 # required: a registered provider or one from this file
     model: gpt-6-luna             # required
@@ -176,8 +176,8 @@ maihem launch NAME [FIRST_MESSAGE] [-d] [--no-sandbox] [--workdir DIR] [--max-st
 
 - `run` does one task and stops. The task comes from the argument or from a pipe. `run -d` runs it in the background; `attach` then shows a read-only view.
 - `launch` starts a chat agent and opens the chat. `launch -d` starts it without the chat.
-- The working directory is `--workdir` or the current directory. `--no-sandbox` and `--max-steps` apply to this run only. They do not change the image.
-- A running agent keeps a copy of its image and provider settings. Later `update` or `rm` commands do not affect it.
+- The working directory is `--workdir` or the current directory. `--no-sandbox` and `--max-steps` apply to this run only. They do not change the definition.
+- A running agent keeps a copy of its definition and provider settings. Later `update` or `rm` commands do not affect it.
 
 | Command | Does |
 |---|---|
@@ -191,7 +191,7 @@ maihem launch NAME [FIRST_MESSAGE] [-d] [--no-sandbox] [--workdir DIR] [--max-st
 
 `run` reads a task argument, piped input, or both. With both, the agent gets one message: the task, then the piped text in an `<input>` block.
 In a pipe, `run` writes only the final answer to stdout. If the final step has no text, the run ends with exit code 2 and `agent finished without output` on stderr. `--allow-empty` makes that a success (exit 0), for agents that only change files. With a task argument, empty piped input is an error (exit 1). So a failed agent earlier in a chain stops the next one. The agent ID, tool lines and notices go to stderr.
-The `translator` image has no tools and a strict prompt, so its answer is always the reply text. Use the same pattern for other pipe steps.
+The `translator` definition has no tools and a strict prompt, so its answer is always the reply text. Use the same pattern for other pipe steps.
 With a task argument, `run` reads stdin only from a pipe or a file (`< FILE`).
 
 ### Limits and exit codes
@@ -241,7 +241,7 @@ n discards the sandbox work.
 
 Everything lives under `~/.maihem` (override with `MAIHEM_HOME`):
 
-- `providers/<name>.yaml`, `images/<name>.yaml`
+- `providers/<name>.yaml`, `definitions/<name>.yaml`
 - `agents/<id>.json` (state), `agents/<id>.log`, `agents/<id>.run.json` (while the agent runs)
 - `worker.json`, `worker.log`
 
