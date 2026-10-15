@@ -1,6 +1,6 @@
 {
   "name": "@maihem/worker",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "scripts": { "dev": "wrangler dev", "build:types": "wrangler types" },
   "dependencies": { "@cloudflare/computer": "0.5.1" },

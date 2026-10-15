@@ -6,6 +6,7 @@ import { App } from "../src/ui/App.ts";
 import stringWidth from "string-width";
 import chalk from "chalk";
 import type { AgentEvent } from "../src/protocol.ts";
+import { VERSION } from "../src/version.ts";
 
 const tick = () => new Promise((r) => setTimeout(r, 50));
 const SIZE = { columns: 80, rows: 24 };
@@ -73,7 +74,7 @@ describe("App", () => {
     const f = lastFrame() ?? "";
     expect(f).toContain("▗▙   ▟▖");
     expect(f).toContain("▐█▀█▀█▌");
-    expect(f).toContain("MAIHEM v0.1.1 · bot");
+    expect(f).toContain(`MAIHEM v${VERSION} · bot`);
     expect(f).toContain("p/m1 · sandbox");
     expect(f).toContain("~/proj · abc");
     await emit({ ...hello, sandbox: false, readonly: true } as AgentEvent);
