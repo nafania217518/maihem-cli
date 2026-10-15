@@ -13,6 +13,8 @@ import { createSandboxBackend } from "./backend-sandbox.ts";
 import type { RunArgs } from "./main.ts";
 import { createModel } from "./model.ts";
 import type { AgentEvent } from "./protocol.ts";
+
+type DoneEvent = Extract<AgentEvent, { type: "done" }>;
 import { home } from "./registry.ts";
 import { attach } from "./attach.ts";
 import { isAlive, logPath, newId, saveState, sockPath } from "./state.ts";
@@ -25,9 +27,10 @@ export const deps: { spawn: typeof spawn; attach: typeof attach; stdin: NodeJS.R
 
 const dim = (s: string): string => `\x1b[2m${s}\x1b[0m`;
 
+let midLine = false;
 export function printEvent(e: AgentEvent): void {
-  if (e.type === "text") process.stdout.write(e.delta);
-  else if (e.type === "tool") process.stderr.write(dim(`⚙ ${e.name}`) + "\n");
+  if (e.type === "text") { process.stdout.write(e.delta); if (e.delta) midLine = !e.delta.endsWith("\n"); }
+  else if (e.type === "tool") { if (midLine) process.stdout.write("\n"); midLine = false; process.stderr.write(dim(`⚙ ${e.name}`) + "\n"); }
   else if (e.type === "tool-result") process.stderr.write(dim(`  → ${e.ok ? "✓" : "✗"} ${e.output.split("\n")[0].slice(0, 80)}`) + "\n");
 }
 
@@ -40,8 +43,13 @@ export async function openBackend(def: Definition, id: string): Promise<Backend>
   return backend;
 }
 
-export function buildAgent(def: Definition, key: string | undefined, backend: Backend, model?: LanguageModel): Agent {
-  return createAgent({ model: model ?? createModel(def, key), system: def.system, tools: createTools(backend, def.tools), maxSteps: def.max_steps });
+export function buildAgent(def: Definition, key: string | undefined, backend: Backend, model?: LanguageModel, oneShot = false): Agent {
+  return createAgent({ model: model ?? createModel(def, key), system: def.system, tools: createTools(backend, def.tools), maxSteps: def.max_steps,
+    reasoning: def.reasoning, context: def.context, onContextFull: def.on_context_full, compactAt: def.compact_at, oneShot });
+}
+
+export function incompleteText(e: DoneEvent): string {
+  return e.incomplete === "step limit" ? `step limit reached (${e.steps})` : e.incomplete === "output limit" ? "output limit reached" : e.incomplete!;
 }
 
 function newState(id: string, def: Definition, pid: number): AgentState {
@@ -97,10 +105,11 @@ export async function runCommand(args: RunArgs): Promise<number> {
   saveState(state);
   console.log(id);
   const backend = await openBackend(def, id);
-  const agent = buildAgent(def, key, backend);
+  const agent = buildAgent(def, key, backend, undefined, true);
   let exitCode = 0;
+  let done: DoneEvent | undefined;
   try {
-    await agent.run(task, printEvent);
+    await agent.run(task, (e) => { printEvent(e); if (e.type === "done" && e.incomplete) done = e; });
     process.stdout.write("\n");
   } catch (e) {
     console.error(`error: ${(e as Error).message}`);
@@ -108,6 +117,7 @@ export async function runCommand(args: RunArgs): Promise<number> {
   } finally {
     if (def.sandbox) await copyOut(backend, def.workdir!);
   }
-  saveState({ ...state, status: "exited", exitCode });
+  if (done && exitCode === 0) { process.stderr.write(`incomplete: ${incompleteText(done)}\n`); exitCode = 2; }
+  saveState({ ...state, status: "exited", exitCode, detail: done?.incomplete });
   return exitCode;
 }

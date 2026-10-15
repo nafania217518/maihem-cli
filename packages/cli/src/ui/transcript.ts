@@ -3,7 +3,7 @@ import { markedTerminal } from "marked-terminal";
 import chalk from "chalk";
 import wrapAnsi from "wrap-ansi";
 import stringWidth from "string-width";
-import type { AgentEvent } from "../protocol.ts";
+import type { AgentEvent, Incomplete } from "../protocol.ts";
 
 export const theme = { accent: "#E5484D", border: "#888888", userBg: "#373737", success: "#4EBA65", error: "#FF6B80", warning: "#FFC107" };
 
@@ -13,11 +13,13 @@ export type Block =
   | { kind: "agent"; text: string; at?: number }
   | { kind: "tool"; id: string; name: string; input: unknown; at?: number; result?: { ok: boolean; output: string; at?: number } }
   | { kind: "step"; n: number; at?: number }
-  | { kind: "turn-end"; usage?: Usage; ms?: number; interrupted?: boolean; at?: number }
-  | { kind: "error"; message: string; at?: number };
+  | { kind: "thinking"; text: string; at?: number }
+  | { kind: "compacted"; before: number; after: number; at?: number }
+  | { kind: "turn-end"; usage?: Usage; ms?: number; interrupted?: boolean; incomplete?: Incomplete; steps?: number; rateLimits?: Record<string, string>; chat?: boolean; at?: number }
+  | { kind: "error"; message: string; status?: number; attempts?: number; at?: number };
 type Opts = { width: number; detailed: boolean };
 
-export function toBlocks(events: AgentEvent[]): Block[] {
+export function toBlocks(events: AgentEvent[], readonly = false): Block[] {
   const out: Block[] = [];
   let step = 0;
   let userAt: number | undefined;
@@ -30,15 +32,19 @@ export function toBlocks(events: AgentEvent[]): Block[] {
     } else if (e.type === "text") {
       if (last?.kind === "agent") last.text += e.delta;
       else out.push({ kind: "agent", text: e.delta, at: e.at });
-    } else if (e.type === "tool") out.push({ kind: "tool", id: e.id, name: e.name, input: e.input, at: e.at });
+    } else if (e.type === "thinking") {
+      if (last?.kind === "thinking") last.text += e.delta;
+      else out.push({ kind: "thinking", text: e.delta, at: e.at });
+    } else if (e.type === "compacted") out.push({ kind: "compacted", before: e.before, after: e.after, at: e.at });
+    else if (e.type === "tool") out.push({ kind: "tool", id: e.id, name: e.name, input: e.input, at: e.at });
     else if (e.type === "tool-result") {
       const t = out.findLast((b) => b.kind === "tool" && b.id === e.id);
       if (t?.kind === "tool") t.result = { ok: e.ok, output: e.output, at: e.at };
     } else if (e.type === "step") out.push({ kind: "step", n: ++step, at: e.at });
     else if (e.type === "done") {
       const ms = e.at !== undefined && userAt !== undefined ? e.at - userAt : undefined;
-      out.push({ kind: "turn-end", usage: e.usage, ms, interrupted: e.interrupted, at: e.at });
-    } else if (e.type === "error") out.push({ kind: "error", message: e.message, at: e.at });
+      out.push({ kind: "turn-end", usage: e.usage, ms, interrupted: e.interrupted, incomplete: e.incomplete, steps: e.steps, rateLimits: e.rateLimits, chat: !readonly, at: e.at });
+    } else if (e.type === "error") out.push({ kind: "error", message: e.message, status: e.status, attempts: e.attempts, at: e.at });
   }
   return out;
 }
@@ -47,8 +53,14 @@ const md = new Marked(markedTerminal({ tab: 2, showSectionPrefix: false }));
 const len = (s: string) => stringWidth(s);
 const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(1, w), { hard: true, trim: false }).split("\n");
 const red = (s: string) => chalk.hex(theme.error)(s);
+const NOTICE: Record<Incomplete, string> = {
+  "step limit": "Step limit reached",
+  "output limit": "Output limit reached, the answer is cut",
+  "context full": "Context full",
+  "content filter": "Stopped by the content filter",
+};
 const clock = (at: number) => new Date(at).toTimeString().slice(0, 8);
-const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+export const k = (n: number) => (n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n));
 
 // Prefix the first line with `first`, the rest with `rest`; wrap the content to fit.
 function gutter(lines: string[], width: number, first: string, rest: string, color = (s: string) => s): string[] {
@@ -80,17 +92,34 @@ function render(b: Block, o: Opts): string[] {
       const ansi = (md.parse(b.text) as string).replace(/\s+$/, "");
       return stamp(gutter(ansi.split("\n"), w, "● ", "  "), b.at, o);
     }
-    case "error":
-      return stamp(gutter(`Error: ${b.message}`.split("\n"), w, "● ", "  ", red), b.at, o);
+    case "error": {
+      const l = stamp(gutter(`Error: ${b.message}`.split("\n"), w, "● ", "  ", red), b.at, o);
+      const info = [b.status !== undefined && `HTTP ${b.status}`, (b.attempts ?? 0) > 1 && `${b.attempts} attempts`].filter(Boolean);
+      return info.length ? [...l, chalk.dim(`  ⎿  ${info.join(" · ")}`)] : l;
+    }
+    case "thinking":
+      return o.detailed
+        ? [chalk.dim("∴ Thinking"), ...gutter(b.text.replace(/\s+$/, "").split("\n"), o.width, "  ", "  ", chalk.dim)]
+        : [chalk.dim("∴ Thinking (ctrl+o to expand)")];
+    case "compacted":
+      return [chalk.dim(`  ⎿  Context compacted: ${k(b.before)} → ~${k(b.after)} tokens`)];
     case "step":
       return o.detailed ? [chalk.dim(`── step ${b.n} `.padEnd(o.width, "─"))] : [];
     case "turn-end": {
       if (b.interrupted) return [red("  ⎿  Interrupted")];
-      if (!o.detailed) return [];
+      const out: string[] = [];
+      if (b.incomplete) {
+        const n = b.incomplete === "step limit" && b.steps !== undefined ? ` (${b.steps})` : "";
+        out.push(chalk.hex(theme.warning)(`  ⎿  ${NOTICE[b.incomplete]}${n}${b.chat ? " · send a message to continue" : ""}`));
+      }
+      if (!o.detailed) return out;
       const u = b.usage ?? {};
       const tok = [u.inputTokens !== undefined && `↑ ${k(u.inputTokens)}`, u.outputTokens !== undefined && `↓ ${k(u.outputTokens)}`].filter(Boolean);
       const parts = [tok.length ? `${tok.join(" ")} tokens` : "", b.ms !== undefined ? `${(b.ms / 1000).toFixed(1)}s` : ""].filter(Boolean);
-      return parts.length ? [chalk.dim(`  ⎿  ${parts.join(" · ")}`)] : [];
+      if (parts.length) out.push(chalk.dim(`  ⎿  ${parts.join(" · ")}`));
+      const rl = Object.entries(b.rateLimits ?? {}).map(([a, v]) => `${a}=${v}`);
+      if (rl.length) out.push(chalk.dim(`  ⎿  rate limits: ${rl.join(" · ")}`));
+      return out;
     }
     case "tool": {
       const r = b.result;

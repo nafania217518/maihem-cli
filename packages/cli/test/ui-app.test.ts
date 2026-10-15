@@ -4,6 +4,7 @@ import React from "react";
 import { render } from "ink-testing-library";
 import { App } from "../src/ui/App.ts";
 import stringWidth from "string-width";
+import chalk from "chalk";
 import type { AgentEvent } from "../src/protocol.ts";
 
 const tick = () => new Promise((r) => setTimeout(r, 50));
@@ -202,7 +203,7 @@ describe("App", () => {
   it("spinner shows a verb with elapsed time while busy", async () => {
     const { lastFrame, emit } = setup();
     await emit(hello, { type: "user", text: "q" }, { type: "text", delta: "x".repeat(8000) });
-    expect(lastFrame()).toMatch(/(Scheming|Plotting|Wreaking|Brewing|Conniving|Tinkering)… \(0s · ↓ 2\.0k tokens\)/);
+    expect(lastFrame()).toMatch(/(Scheming|Plotting|Wreaking|Brewing|Conniving|Tinkering)… \(0s · ↓ 2k tokens\)/);
     const a = lastFrame();
     await new Promise((r) => setTimeout(r, 150));
     expect(lastFrame()).not.toBe(a);
@@ -356,5 +357,47 @@ describe("App", () => {
       for (const line of lastFrame()!.split("\n")) expect(stringWidth(line)).toBeLessThanOrEqual(size.columns);
       unmount();
     }
+  });
+
+  const last = (f: string | undefined) => rows(f).at(-1)!;
+
+  it("footer gauge shows used, budget and percent", async () => {
+    const { lastFrame, emit } = setup();
+    await emit(hello);
+    expect(lastFrame()).not.toContain("ctx ");
+    await emit({ type: "context", used: 12300, budget: 64000 });
+    expect(last(lastFrame())).toMatch(/ctx 12\.3k\/64k · 19%.*simplified/);
+  });
+
+  it("gauge turns yellow at 70% and red at 90%", async () => {
+    chalk.level = 3;
+    const { lastFrame, emit } = setup();
+    const color = async (used: number) => {
+      await emit({ type: "context", used, budget: 100 });
+      return last(lastFrame()).match(/(\x1b\[[\d;]*m)+ctx/)?.[0] ?? "";
+    };
+    await emit(hello);
+    const low = await color(10);
+    const mid = await color(70);
+    const high = await color(90);
+    expect(new Set([low, mid, high]).size).toBe(3);
+    expect(mid).toContain("38;2;255;193;7");
+    expect(high).toContain("38;2;255;107;128");
+    chalk.level = 0;
+  });
+
+  it("gauge shows only used tokens without a budget", async () => {
+    const { lastFrame, emit } = setup();
+    await emit(hello, { type: "context", used: 12300 });
+    expect(last(lastFrame())).toContain("ctx 12.3k ·");
+    expect(last(lastFrame())).not.toContain("%");
+  });
+
+  it("gauge updates after compaction", async () => {
+    const { lastFrame, emit } = setup();
+    await emit(hello, { type: "context", used: 52100, budget: 64000 }, { type: "compacted", before: 52100, after: 8700 });
+    expect(last(lastFrame())).toContain("ctx 8.7k/64k · 14%");
+    await emit({ type: "context", used: 9000, budget: 64000 });
+    expect(last(lastFrame())).toContain("ctx 9k/64k");
   });
 });

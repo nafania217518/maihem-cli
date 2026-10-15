@@ -5,7 +5,7 @@ import { Box, Text, useInput, useWindowSize } from "ink";
 import TextInput from "ink-text-input";
 import stringWidth from "string-width";
 import type { AgentEvent } from "../protocol.ts";
-import { renderTranscript, theme, toBlocks } from "./transcript.ts";
+import { k, renderTranscript, theme, toBlocks } from "./transcript.ts";
 
 const h = React.createElement;
 const FRAMES = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"];
@@ -27,7 +27,6 @@ export interface AppProps {
 }
 
 type Hello = Extract<AgentEvent, { type: "hello" }>;
-const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 // Shorten s to w columns by cutting the middle.
 export const middle = (s: string, w: number): string => {
   if (stringWidth(s) <= w) return s;
@@ -52,6 +51,7 @@ export function App(props: AppProps): React.ReactElement {
   const [help, setHelp] = useState(false);
   const [offset, setOffset] = useState(0);
   const [fresh, setFresh] = useState(0);
+  const [ctx, setCtx] = useState<{ used: number; budget?: number } | null>(null);
 
   useEffect(() => {
     const on = (e: AgentEvent): void => {
@@ -59,11 +59,14 @@ export function App(props: AppProps): React.ReactElement {
         setHello(e);
         setEvents([]);
         setTurn(null);
+        setCtx(null);
         return e.history.forEach(on);
       }
       setEvents((es) => [...es, e]);
       if (e.type === "user") setTurn({ start: Date.now(), verb: VERBS[Math.floor(Math.random() * VERBS.length)], chars: 0 });
       else if (e.type === "text") setTurn((t) => t && { ...t, chars: t.chars + e.delta.length });
+      else if (e.type === "context") setCtx({ used: e.used, budget: e.budget });
+      else if (e.type === "compacted") setCtx((c) => ({ ...c, used: e.after }));
       else if (e.type === "done" || e.type === "error") setTurn(null);
     };
     return props.subscribe(on);
@@ -76,7 +79,7 @@ export function App(props: AppProps): React.ReactElement {
     return () => clearInterval(t);
   }, [busy]);
 
-  const lines = useMemo(() => renderTranscript(toBlocks(events), { width: columns, detailed }), [events, columns, detailed]);
+  const lines = useMemo(() => renderTranscript(toBlocks(events, hello?.readonly), { width: columns, detailed }), [events, columns, detailed, hello?.readonly]);
   const height = Math.max(1, rows - 4 - (busy ? 1 : 0) - 3 - (help ? HELP[0].length : 1));
   const max = Math.max(0, lines.length - height);
   const off = Math.min(offset, max);
@@ -190,9 +193,13 @@ export function App(props: AppProps): React.ReactElement {
       : busy && !hello?.readonly
         ? "esc to interrupt · ctrl+d to detach"
         : "? for shortcuts";
+  const pct = ctx?.budget ? Math.round((ctx.used / ctx.budget) * 100) : undefined;
+  const gauge = ctx
+    ? h(Text, { color: pct === undefined || pct < 70 ? undefined : pct < 90 ? theme.warning : theme.error, dimColor: pct === undefined || pct < 70 }, `ctx ${k(ctx.used)}${ctx.budget ? `/${k(ctx.budget)} · ${pct}%` : ""} · `)
+    : null;
   const footer = help
     ? h(Box, { paddingX: 1, gap: 4 }, ...HELP.map((col, i) => h(Box, { key: i, flexDirection: "column" }, ...col.map((t) => h(Text, { key: t, dimColor: true }, t)))))
-    : h(Box, { paddingX: 1, justifyContent: "space-between", gap: 1 }, h(Box, { flexShrink: 1, minWidth: 0 }, dim(hint)), h(Box, { flexShrink: 1, minWidth: 0 }, dim(detailed ? "detailed · ctrl+o for simplified" : "simplified · ctrl+o for details")));
+    : h(Box, { paddingX: 1, justifyContent: "space-between", gap: 1 }, h(Box, { flexShrink: 1, minWidth: 0 }, dim(hint)), h(Box, { flexShrink: 1, minWidth: 0 }, h(Text, { wrap: "truncate-end" }, gauge, h(Text, { dimColor: true }, detailed ? "detailed · ctrl+o for simplified" : "simplified · ctrl+o for details"))));
 
   return h(
     Box,

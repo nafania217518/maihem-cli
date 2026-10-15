@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { stripVTControlCharacters as strip } from "node:util";
 import chalk from "chalk";
 import stringWidth from "string-width";
-import { toBlocks, renderBlock, renderTranscript, theme, type Block } from "../src/ui/transcript.ts";
+import type { AgentEvent } from "../src/protocol.ts";
+import { k, toBlocks, renderBlock, renderTranscript, theme, type Block } from "../src/ui/transcript.ts";
 
 const S = { width: 60, detailed: false };
 const D = { width: 60, detailed: true };
@@ -168,5 +169,61 @@ describe("renderTranscript", () => {
   it("joins blocks with one empty line and skips empty ones", () => {
     const l = txt(renderTranscript([{ kind: "user", text: "a" }, { kind: "step", n: 1 }, { kind: "error", message: "e" }], S));
     expect(l.map((x) => x.trimEnd())).toEqual(["❯ a", "", "● Error: e"]);
+  });
+});
+
+describe("agent signals", () => {
+  const both = (b: Block[]) => [S, D].map((o) => txt(renderTranscript(b, o)));
+
+  it("thinking is collapsed in simplified and full in detailed", () => {
+    chalk.level = 1;
+    const b = toBlocks([{ type: "thinking", delta: "a b" }, { type: "thinking", delta: "\nc" }, { type: "text", delta: "x" }]);
+    expect(b.map((x) => x.kind)).toEqual(["thinking", "agent"]);
+    const s = renderBlock(b[0], S);
+    expect(txt(s)).toEqual(["∴ Thinking (ctrl+o to expand)"]);
+    expect(s[0]).toContain("\x1b[2m");
+    const d = renderBlock(b[0], D);
+    expect(txt(d)).toEqual(["∴ Thinking", "  a b", "  c"]);
+    expect(d.every((l) => l.includes("\x1b[2m"))).toBe(true);
+    chalk.level = 0;
+  });
+
+  it("compacted line shows before and after", () => {
+    for (const l of both(toBlocks([{ type: "compacted", before: 52100, after: 8700 }]))) expect(l).toEqual(["  ⎿  Context compacted: 52.1k → ~8.7k tokens"]);
+  });
+
+  it("incomplete notices show in both views", () => {
+    chalk.level = 1;
+    const cases: [AgentEvent, string][] = [
+      [{ type: "done", incomplete: "step limit", steps: 20 }, "Step limit reached (20)"],
+      [{ type: "done", incomplete: "output limit" }, "Output limit reached, the answer is cut"],
+      [{ type: "done", incomplete: "context full" }, "Context full"],
+      [{ type: "done", incomplete: "content filter" }, "Stopped by the content filter"],
+    ];
+    for (const [e, t] of cases) {
+      const b = toBlocks([e]);
+      for (const l of both(b)) expect(l[0]).toBe(`  ⎿  ${t} · send a message to continue`);
+      expect(renderBlock(b[0], S)[0]).toBe(chalk.hex(theme.warning)(`  ⎿  ${t} · send a message to continue`));
+    }
+    chalk.level = 0;
+  });
+
+  it("read-only agents get no 'send a message' hint", () => {
+    for (const l of both(toBlocks([{ type: "done", incomplete: "context full" }], true))) expect(l).toEqual(["  ⎿  Context full"]);
+  });
+
+  it("error shows the HTTP status and attempts line", () => {
+    expect(txt(renderTranscript(toBlocks([{ type: "error", message: "x", status: 429, attempts: 3 }]), S))).toEqual(["● Error: x", "  ⎿  HTTP 429 · 3 attempts"]);
+    expect(txt(renderTranscript(toBlocks([{ type: "error", message: "x", status: 500, attempts: 1 }]), S))).toEqual(["● Error: x", "  ⎿  HTTP 500"]);
+    expect(txt(renderTranscript(toBlocks([{ type: "error", message: "x", attempts: 2 }]), S))).toEqual(["● Error: x", "  ⎿  2 attempts"]);
+  });
+
+  it("detailed turn-end shows rate limits", () => {
+    const b = toBlocks([{ type: "done", usage: { inputTokens: 5 }, rateLimits: { a: "1", b: "2" } }]);
+    expect(txt(renderTranscript(b, D))).toEqual(["  ⎿  ↑ 5 tokens", "  ⎿  rate limits: a=1 · b=2"]);
+    expect(renderTranscript(b, S)).toEqual([]);
+  });
+  it("token counts drop a trailing .0", () => {
+    expect([64000, 12300, 9000, 999].map(k)).toEqual(["64k", "12.3k", "9k", "999"]);
   });
 });

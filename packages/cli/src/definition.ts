@@ -4,6 +4,8 @@ import YAML from "yaml";
 export const TOOLS = ["read", "write", "edit", "list", "exec"] as const;
 export type Tool = (typeof TOOLS)[number];
 export type Provider = "openai" | "anthropic" | "ollama";
+export const REASONING = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type Reasoning = (typeof REASONING)[number];
 export interface Definition {
   name: string;
   provider: Provider;
@@ -15,6 +17,10 @@ export interface Definition {
   workdir?: string;
   max_steps: number;
   api_key?: string;
+  reasoning?: Reasoning;
+  context?: number;
+  on_context_full: "compact" | "fail";
+  compact_at: number;
 }
 
 const PROVIDERS = ["openai", "anthropic", "ollama"];
@@ -35,6 +41,12 @@ function validate(raw: Record<string, unknown>): Definition {
   }
   const max_steps = raw.max_steps ?? 50;
   if (!Number.isInteger(max_steps) || (max_steps as number) < 1) throw new Error("definition: max_steps must be a positive integer");
+  if (raw.reasoning !== undefined && !(REASONING as readonly unknown[]).includes(raw.reasoning)) throw new Error(`definition: unknown reasoning "${raw.reasoning}" (use ${REASONING.join(", ")})`);
+  if (raw.context !== undefined && (!Number.isInteger(raw.context) || (raw.context as number) < 1)) throw new Error("definition: context must be a positive integer");
+  const on_context_full = raw.on_context_full ?? "compact";
+  if (on_context_full !== "compact" && on_context_full !== "fail") throw new Error('definition: on_context_full must be "compact" or "fail"');
+  const compact_at = raw.compact_at ?? 0.8;
+  if (typeof compact_at !== "number" || !(compact_at > 0 && compact_at <= 1)) throw new Error("definition: compact_at must be a number in (0, 1]");
   const d: Definition = {
     name: raw.name as string,
     provider: raw.provider as Provider,
@@ -42,7 +54,11 @@ function validate(raw: Record<string, unknown>): Definition {
     tools: tools as Tool[],
     sandbox: raw.sandbox !== false,
     max_steps: max_steps as number,
+    on_context_full,
+    compact_at,
   };
+  if (raw.reasoning !== undefined) d.reasoning = raw.reasoning as Reasoning;
+  if (raw.context !== undefined) d.context = raw.context as number;
   for (const k of ["base_url", "system", "workdir", "api_key"] as const) {
     if (typeof raw[k] === "string") d[k] = raw[k] as string;
   }

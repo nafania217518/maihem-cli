@@ -15,6 +15,7 @@ export interface AgentState {
   log: string;
   sock: string;
   exitCode?: number;
+  detail?: string;
 }
 
 const dir = (): string => path.join(home(), "agents");

@@ -70,6 +70,13 @@ describe("main", () => {
     expect(out()).toMatch(/ID\s+NAME\s+STATUS\s+SANDBOX\s+WORKDIR\s+STARTED/);
     expect(out()).toMatch(/x1\s+a\s+exited/);
   });
+  it("ps shows idle (step limit) and exited (step limit)", async () => {
+    saveState({ id: "r1", name: "a", pid: process.pid, status: "running", workdir: "/w", sandbox: true, started: "2026-01-01T00:00:00.000Z", log: logPath("r1"), sock: sockPath("r1"), detail: "step limit" });
+    saveState({ id: "e1", name: "a", pid: 999999, status: "exited", exitCode: 2, workdir: "/w", sandbox: true, started: "2026-01-01T00:00:00.000Z", log: logPath("e1"), sock: sockPath("e1"), detail: "step limit" });
+    expect(await main(["ps"])).toBe(0);
+    expect(out()).toMatch(/r1\s+a\s+idle \(step limit\)/);
+    expect(out()).toMatch(/e1\s+a\s+exited \(step limit\)/);
+  });
   it("stop on a real child process ends it", async () => {
     const child = spawn("sleep", ["30"]);
     saveState({ id: "c1", name: "a", pid: child.pid!, status: "running", workdir: "/w", sandbox: true, started: "2026-01-01T00:00:00.000Z", log: logPath("c1"), sock: sockPath("c1") });

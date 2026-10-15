@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { streamText } from "ai";
-import { createModel } from "../src/model.ts";
+import { streamText, RetryError } from "ai";
+import { createModel, retryDelays } from "../src/model.ts";
 import { parseDefinition } from "../src/definition.ts";
 
 const def = (provider: string, base_url?: string) => parseDefinition(JSON.stringify({ name: "a", provider, model: "m1", base_url }));
@@ -49,5 +49,44 @@ describe("model", () => {
       server.closeAllConnections();
       server.close();
     }
+  });
+  describe("ollama retries", () => {
+    retryDelays.splice(0, 2, 0, 0);
+    const serve = async (status: number) => {
+      let hits = 0;
+      const server = http.createServer((_req, res) => { hits++; res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify({ error: "nope" })); });
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, hits: () => hits, close: () => server.close() };
+    };
+    const fail = async (url: string) => {
+      let err: unknown;
+      const r = streamText({ model: createModel(def("ollama", url), undefined), prompt: "x", onError: ({ error }) => { err = error; } });
+      await r.consumeStream();
+      return err;
+    };
+    it("ollama start errors with status 500 are retried twice", async () => {
+      const s = await serve(500);
+      try { await fail(s.url); expect(s.hits()).toBe(3); } finally { s.close(); }
+    });
+    it("ollama gives up after 3 attempts with a RetryError", async () => {
+      const s = await serve(500);
+      try {
+        const e = await fail(s.url);
+        expect(RetryError.isInstance(e)).toBe(true);
+        expect((e as Error).message).toMatch(/^Failed after 3 attempts\. Last error: /);
+        expect((e as RetryError).errors).toHaveLength(3);
+      } finally { s.close(); }
+    });
+    it("ollama 404 is not retried", async () => {
+      const s = await serve(404);
+      try { const e = await fail(s.url); expect(s.hits()).toBe(1); expect(RetryError.isInstance(e)).toBe(false); } finally { s.close(); }
+    });
+    it("ollama connection refused is retried", async () => {
+      const s = await serve(500);
+      s.close();
+      const e = await fail(s.url);
+      expect(RetryError.isInstance(e)).toBe(true);
+      expect((e as RetryError).errors).toHaveLength(3);
+    });
   });
 });

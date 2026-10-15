@@ -73,4 +73,31 @@ describe("definition", () => {
     expect(mask(d)).toEqual(d);
     expect(mask({ ...d, api_key: "sk-abcdef" }).api_key).toBe("****cdef");
   });
+
+  const pd = (extra: object) => parseDefinition(JSON.stringify({ ...base, ...extra }));
+
+  it("reasoning accepts only the neutral levels", () => {
+    expect(() => pd({ reasoning: "turbo" })).toThrow(/reasoning/);
+    expect(pd({ reasoning: "high" }).reasoning).toBe("high");
+    expect(pd({}).reasoning).toBeUndefined();
+  });
+
+  it("context must be a positive integer", () => {
+    for (const v of [0, -1, 1.5, "8k"]) expect(() => pd({ context: v })).toThrow(/context/);
+    expect(pd({ context: 64000 }).context).toBe(64000);
+    expect(pd({}).context).toBeUndefined();
+  });
+
+  it("on_context_full defaults to compact", () => {
+    expect(pd({}).on_context_full).toBe("compact");
+    expect(pd({ on_context_full: "fail" }).on_context_full).toBe("fail");
+    expect(() => pd({ on_context_full: "drop" })).toThrow(/on_context_full/);
+  });
+
+  it("compact_at defaults to 0.8 and must be in (0,1]", () => {
+    expect(pd({}).compact_at).toBe(0.8);
+    for (const v of [0, 1.2, "x"]) expect(() => pd({ compact_at: v })).toThrow(/compact_at/);
+    expect(pd({ compact_at: 1 }).compact_at).toBe(1);
+    expect(pd({ compact_at: 0.5 }).compact_at).toBe(0.5);
+  });
 });

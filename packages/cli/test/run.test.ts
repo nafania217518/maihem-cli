@@ -18,6 +18,11 @@ const steps = () => [
   stream([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "answer" }, { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "stop", raw: "" }, usage }]),
 ];
 let modelImpl: () => MockLanguageModelV4;
+const fake = vi.hoisted(() => ({ agent: undefined as undefined | ((o: unknown) => unknown), opts: [] as unknown[] }));
+vi.mock("../src/agent.ts", async (orig) => {
+  const real = (await orig()) as { createAgent: (o: unknown) => unknown };
+  return { ...real, createAgent: (o: unknown) => { fake.opts.push(o); return fake.agent ? fake.agent(o) : real.createAgent(o); } };
+});
 vi.mock("../src/model.ts", () => ({ createModel: () => modelImpl() }));
 const w = vi.hoisted(() => ({ ensureWorker: vi.fn(async () => "http://w"), createSandboxBackend: vi.fn(), copyIn: vi.fn(async () => 1), copyOut: vi.fn(async () => 1) }));
 vi.mock("../src/worker.ts", () => ({ ensureWorker: w.ensureWorker, startWorker: w.ensureWorker, stopWorker: vi.fn(), workerStatus: vi.fn() }));
@@ -72,6 +77,15 @@ describe("run", () => {
     expect(w.copyOut).toHaveBeenCalledTimes(1);
     expect(err).toContain("error: boom");
     expect(listStates()[0]).toMatchObject({ status: "exited", exitCode: 1 });
+  });
+  it("foreground step limit returns 2 and prints the reason", async () => {
+    fake.agent = () => ({ history: [], interrupt: () => {}, run: async (_t: string, emit: (e: unknown) => void) => { emit({ type: "done", incomplete: "step limit", steps: 5 }); } });
+    try {
+      expect(await main(args("--no-sandbox", "do it"))).toBe(2);
+    } finally { fake.agent = undefined; }
+    expect(err).toContain("incomplete: step limit reached (5)");
+    expect((fake.opts.at(-1) as { oneShot: boolean }).oneShot).toBe(true);
+    expect(listStates()[0]).toMatchObject({ status: "exited", exitCode: 2, detail: "step limit" });
   });
   it("run without a task on a TTY points to launch", async () => {
     deps.stdin = Object.assign(Readable.from([]), { isTTY: true });
@@ -139,5 +153,16 @@ describe("run", () => {
     printEvent({ type: "tool-result", id: "c1", name: "x", ok: true, output: "line one " + "y".repeat(100) + "\nline two" });
     printEvent({ type: "tool-result", id: "c2", name: "x", ok: false, output: "bad" });
     expect(err).toBe(`\x1b[2m  → ✓ ${("line one " + "y".repeat(100)).slice(0, 80)}\x1b[0m\n\x1b[2m  → ✗ bad\x1b[0m\n`);
+  });
+  it("printEvent starts a tool on a new line after answer text", () => {
+    const log: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((s) => { log.push(`out:${s}`); return true; });
+    vi.spyOn(process.stderr, "write").mockImplementation((s) => { log.push("err"); return true; });
+    printEvent({ type: "text", delta: "abc" });
+    printEvent({ type: "tool", id: "c1", name: "read", input: {} } as never);
+    printEvent({ type: "text", delta: "x\n" });
+    printEvent({ type: "text", delta: "" });
+    printEvent({ type: "tool", id: "c2", name: "read", input: {} } as never);
+    expect(log).toEqual(["out:abc", "out:\n", "err", "out:x\n", "out:", "err"]);
   });
 });

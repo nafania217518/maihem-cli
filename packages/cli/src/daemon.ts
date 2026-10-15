@@ -15,19 +15,21 @@ export async function serveAgent(id: string, opts: { model?: LanguageModel } = {
   const { def, task, apiKey, mode = "chat" } = JSON.parse(fs.readFileSync(runFile(id), "utf8")) as { def: Definition; task?: string; apiKey?: string; mode?: "run" | "chat" };
   const readonly = mode === "run";
   const backend = await openBackend(def, id);
-  const agent = buildAgent(def, apiKey, backend, opts.model);
+  const agent = buildAgent(def, apiKey, backend, opts.model, readonly);
   const clients = new Set<net.Socket>();
   let busy = false;
   let exitCode = 0;
 
   const broadcast = (e: AgentEvent): void => {
     printEvent(e);
+    if (e.type === "done" && e.incomplete) { saveState({ ...loadState(id), detail: e.incomplete }); if (readonly) exitCode = 2; }
     for (const c of clients) c.write(encode(e));
   };
   const handle = async (text: string, reply?: net.Socket): Promise<void> => {
     if (readonly && reply) { reply.write(encode({ type: "error", message: "read-only: this agent runs one task" })); return; }
     if (busy) { reply?.write(encode({ type: "error", message: "busy: a turn is in progress" })); return; }
     busy = true;
+    if (loadState(id).detail) saveState({ ...loadState(id), detail: undefined });
     try { await agent.run(text, broadcast); } catch { exitCode = 1; /* agent.run already broadcast the error */ }
     busy = false;
   };
@@ -55,7 +57,7 @@ export async function serveAgent(id: string, opts: { model?: LanguageModel } = {
     server.close();
     for (const c of clients) c.end();
     if (def.sandbox && apply) await copyOut(backend, def.workdir!);
-    saveState({ ...state, status: "exited", exitCode });
+    saveState({ ...loadState(id), status: "exited", exitCode });
     fs.rmSync(runFile(id), { force: true });
     fs.rmSync(state.sock, { force: true });
     resolveDone();

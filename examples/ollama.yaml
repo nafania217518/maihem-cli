@@ -7,3 +7,5 @@ system: |
 tools: [read, write, edit, list, exec]
 sandbox: true
 max_steps: 30
+reasoning: low
+context: 32000

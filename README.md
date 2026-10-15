@@ -55,7 +55,8 @@ The chat is full screen. The header shows the agent, the footer shows key hints,
 | Ctrl+O | switch between the simplified and the detailed view |
 | PgUp / PgDn, Shift+↑ / ↓, Home / End | scroll the chat |
 
-The detailed view adds full tool input and output, timestamps, model steps, and tokens and time per turn.
+The detailed view adds full tool input and output, model thinking, timestamps, model steps, tokens and time per turn, and rate limits.
+The footer shows the context gauge, for example `ctx 12.3k/64k · 19%`. It turns yellow at 70% and red at 90%.
 
 Leaving the chat asks `Stop agent <id>? [y/N]`.
 Any answer other than y detaches, and the agent keeps running.
@@ -75,7 +76,29 @@ tools: [read, write, edit, list, exec]   # pick any subset
 sandbox: true                  # default true
 max_steps: 50                  # default 50
 api_key: sk-...                # optional
+reasoning: medium              # optional: none | minimal | low | medium | high | xhigh | max
+context: 64000                 # optional: token budget that MAIHEM tracks; not sent to the provider
+on_context_full: compact       # compact (default) | fail
+compact_at: 0.8                # compact when the context reaches this part of the budget
 ```
+
+- `reasoning` is the AI SDK reasoning level. Each provider maps it to its own setting. Models without reasoning ignore it.
+- `context` sets the budget for the footer gauge and for compaction. Without it, MAIHEM compacts only when the provider reports an overflow.
+- Compaction: the same model summarises the older messages. The newest messages (about 25% of the budget) stay unchanged.
+- `on_context_full: fail` ends the turn with "context full" instead.
+
+### Limits
+
+| Limit | Chat (`launch`) | One-shot (`run`, `run -d`) |
+|---|---|---|
+| `max_steps` | Notice in the chat. Send a message to continue. | One last step without tools summarises the work. Exit code 2. |
+| Output limit (answer cut) | Notice in the chat | Exit code 2 |
+| Context full (`fail` policy or after a failed compaction) | Notice in the chat | Exit code 2 |
+
+Exit codes: 0 done, 1 error, 2 incomplete. The reason goes to stderr.
+`maihem ps` shows the reason, for example `idle (step limit)` or `exited (step limit)`.
+Provider errors show the HTTP status and the number of attempts.
+MAIHEM retries rate limits, server errors and broken streams 2 times. A failed turn keeps its finished steps.
 
 API key precedence: `--api-key` flag, then `api_key` in the definition, then `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
 

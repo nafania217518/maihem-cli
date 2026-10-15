@@ -138,7 +138,7 @@ export async function main(argv: string[]): Promise<number> {
         console.log(`removed ${rest[0]}`);
         return 0;
       case "ps": {
-        const rows = [["ID", "NAME", "STATUS", "SANDBOX", "WORKDIR", "STARTED"], ...listStates().map(refresh).map((s) => [s.id, s.name, s.status, String(s.sandbox), s.workdir, s.started])];
+        const rows = [["ID", "NAME", "STATUS", "SANDBOX", "WORKDIR", "STARTED"], ...listStates().map(refresh).map((s) => [s.id, s.name, s.detail ? `${s.status === "running" ? "idle" : s.status} (${s.detail})` : s.status, String(s.sandbox), s.workdir, s.started])];
         for (const l of pad(rows)) console.log(l);
         return 0;
       }

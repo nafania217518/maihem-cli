@@ -22,6 +22,12 @@ const w = vi.hoisted(() => ({ ensureWorker: vi.fn(async () => "http://w"), creat
 vi.mock("../src/worker.ts", () => ({ ensureWorker: w.ensureWorker }));
 vi.mock("../src/backend-sandbox.ts", () => ({ createSandboxBackend: w.createSandboxBackend }));
 vi.mock("../src/sync.ts", () => ({ copyIn: w.copyIn, copyOut: w.copyOut }));
+const fake = vi.hoisted(() => ({ agent: undefined as undefined | ((o: unknown) => unknown), opts: [] as unknown[] }));
+vi.mock("../src/agent.ts", async (orig) => {
+  const real = (await orig()) as { createAgent: (o: unknown) => unknown };
+  return { ...real, createAgent: (o: unknown) => { fake.opts.push(o); return fake.agent ? fake.agent(o) : real.createAgent(o); } };
+});
+const stepLimitAgent = () => ({ history: [], interrupt: () => {}, run: async (_t: string, emit: (e: unknown) => void) => { emit({ type: "done", incomplete: "step limit", steps: 5 }); } });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function client(sock: string): { events: AgentEvent[]; send(text: string): void; raw(m: object): void; wait(type: string, n?: number): Promise<void>; end(): void } {
@@ -57,7 +63,7 @@ describe("daemon", () => {
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     vi.clearAllMocks();
   });
-  afterEach(async () => { await handle?.shutdown(); handle = undefined; vi.restoreAllMocks(); });
+  afterEach(async () => { await handle?.shutdown(); handle = undefined; fake.agent = undefined; vi.restoreAllMocks(); });
 
   it("client gets hello and a msg yields events in order, file written", async () => {
     setup();
@@ -67,12 +73,12 @@ describe("daemon", () => {
     expect(c.events[0]).toMatchObject({ type: "hello", name: "bot", model: "m", sandbox: false, id, history: [] });
     c.send("do it");
     await c.wait("done");
-    expect(c.events.slice(1).map((e) => e.type)).toEqual(["user", "step", "tool", "tool-result", "step", "text", "done"]);
+    expect(c.events.slice(1).map((e) => e.type)).toEqual(["user", "step", "tool", "tool-result", "context", "step", "text", "context", "done"]);
     expect(fs.readFileSync(path.join(work, "out.txt"), "utf8")).toBe("data");
     expect(out).toContain("answer");
     const c2 = client(handle.sock);
     await c2.wait("hello");
-    expect((c2.events[0] as { history: AgentEvent[] }).history.map((e) => e.type)).toEqual(["user", "step", "tool", "tool-result", "step", "text", "done"]);
+    expect((c2.events[0] as { history: AgentEvent[] }).history.map((e) => e.type)).toEqual(["user", "step", "tool", "tool-result", "context", "step", "text", "context", "done"]);
     c.end(); c2.end();
   });
   it("msg while busy gets a busy error", async () => {
@@ -232,6 +238,35 @@ describe("daemon", () => {
     expect(c.events.find((e) => e.type === "error")).toEqual({ type: "error", message: "read-only: this agent runs one task" });
     await c.wait("done");
     expect(c.events.find((e) => e.type === "done")).not.toHaveProperty("interrupted");
+    c.end();
+  });
+  it("read-only step limit stores exit code 2 and the step limit detail", async () => {
+    setup({ mode: "run", task: "go" });
+    fake.agent = stepLimitAgent;
+    const h = await serveAgent(id);
+    await h.done;
+    expect((fake.opts.at(-1) as { oneShot: boolean }).oneShot).toBe(true);
+    expect(loadState(id)).toMatchObject({ status: "exited", exitCode: 2, detail: "step limit" });
+  });
+  it("chat clears the detail on the next message", async () => {
+    setup();
+    let calls = 0;
+    fake.agent = () => ({ history: [], interrupt: () => {}, run: async (_t: string, emit: (e: unknown) => void) => {
+      if (calls++ === 0) emit({ type: "done", incomplete: "step limit", steps: 5 }); else { await sleep(50); emit({ type: "done" }); }
+    } });
+    handle = await serveAgent(id);
+    const c = client(handle.sock);
+    await c.wait("hello");
+    c.send("one");
+    await c.wait("done");
+    expect(loadState(id).detail).toBe("step limit");
+    expect((fake.opts.at(-1) as { oneShot: boolean }).oneShot).toBe(false);
+    c.send("two");
+    await sleep(20);
+    expect(loadState(id).detail).toBeUndefined();
+    await c.wait("done", 2);
+    await handle.shutdown();
+    expect(loadState(id)).toMatchObject({ status: "exited", exitCode: 0 });
     c.end();
   });
 });
