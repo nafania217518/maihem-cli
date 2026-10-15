@@ -50,7 +50,8 @@ The chat is full screen. The header shows the agent, the footer shows key hints,
 |---|---|
 | Enter | send the message |
 | Esc | interrupt the running turn; when idle, leave the chat |
-| Ctrl+C | leave the chat |
+| Ctrl+C | stop question: stop the agent or leave it running |
+| Ctrl+D | detach; the agent keeps running |
 | Ctrl+O | switch between the simplified and the detailed view |
 | PgUp / PgDn, Shift+↑ / ↓, Home / End | scroll the chat |
 

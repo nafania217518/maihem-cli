@@ -127,6 +127,51 @@ describe("App", () => {
     expect(lastFrame()).toContain("? for shortcuts");
   });
 
+  it("ctrl+d detaches without interrupting while busy", async () => {
+    const { stdin, emit, detach, interrupt, stop } = setup();
+    await emit(hello, { type: "user", text: "q" });
+    await key(stdin, "\u0004");
+    expect(detach).toHaveBeenCalled();
+    expect(interrupt).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("ctrl+d detaches when idle without asking", async () => {
+    const { stdin, emit, detach, lastFrame } = setup();
+    await emit(hello);
+    await key(stdin, "\u0004");
+    expect(detach).toHaveBeenCalled();
+    expect(lastFrame()).not.toContain("Stop agent");
+  });
+
+  it("ctrl+d detaches while a question is open", async () => {
+    const { stdin, emit, detach, stop } = setup();
+    await emit(hello);
+    await key(stdin, "\u001b", "\u0004");
+    expect(detach).toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("ctrl+d does not land in the input", async () => {
+    const { stdin, emit, lastFrame } = setup();
+    await emit(hello);
+    await key(stdin, "a", "b", "\u0004");
+    expect(rows(lastFrame()).find((l) => l.includes("❯"))?.trim()).toBe("❯ ab");
+  });
+
+  it("busy footer shows esc to interrupt and ctrl+d to detach", async () => {
+    const { emit, lastFrame } = setup();
+    await emit(hello, { type: "user", text: "q" });
+    expect(lastFrame()).toContain("esc to interrupt · ctrl+d to detach");
+  });
+
+  it("help panel lists ctrl+d detach", async () => {
+    const { stdin, emit, lastFrame } = setup();
+    await emit(hello);
+    await key(stdin, "?");
+    expect(lastFrame()).toContain("ctrl+d  detach");
+  });
+
   it("? on empty input toggles the help panel", async () => {
     const { lastFrame, emit, stdin } = setup();
     await emit(hello);

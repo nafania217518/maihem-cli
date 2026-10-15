@@ -13,7 +13,7 @@ const VERBS = ["Scheming", "Plotting", "Wreaking", "Brewing", "Conniving", "Tink
 const MASCOT = "▗▙   ▟▖\n▐█▀█▀█▌\n ▀▘ ▝▀ ";
 const VERSION: string = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
 const HELP = [
-  ["enter  send", "esc  interrupt / leave", "ctrl+c  stop agent", "ctrl+o  simplified / detailed"],
+  ["enter  send", "esc  interrupt / leave", "ctrl+c  stop agent", "ctrl+o  simplified / detailed", "ctrl+d  detach"],
   ["pgup/pgdn  scroll a page", "shift+↑/↓  scroll a line", "home/end  top / bottom", "?  close help"],
 ];
 
@@ -105,7 +105,10 @@ export function App(props: AppProps): React.ReactElement {
   const quit = () => (hello ? setAsk("stop") : props.detach());
   useInput((ch, key) => {
     const leave = key.escape || (key.ctrl && ch === "c");
-    if (ask === "stop") {
+    if (key.ctrl && ch === "d") {
+      setInput(input); // TextInput also received the "d"
+      props.detach();
+    } else if (ask === "stop") {
       if (ch !== "y") props.detach();
       else if (hello?.sandbox) setAsk("apply");
       else halt(true);
@@ -185,7 +188,7 @@ export function App(props: AppProps): React.ReactElement {
   const hint = off > 0
       ? `↓ ${fresh || off} more lines · end to jump`
       : busy && !hello?.readonly
-        ? "esc to interrupt"
+        ? "esc to interrupt · ctrl+d to detach"
         : "? for shortcuts";
   const footer = help
     ? h(Box, { paddingX: 1, gap: 4 }, ...HELP.map((col, i) => h(Box, { key: i, flexDirection: "column" }, ...col.map((t) => h(Text, { key: t, dimColor: true }, t)))))
