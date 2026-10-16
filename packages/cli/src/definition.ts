@@ -17,6 +17,7 @@ export interface Definition {
   context?: number;
   on_context_full: "compact" | "fail";
   compact_at: number;
+  sandbox_exclude?: string[];
 }
 
 export function splitTools(s: string): string[] {
@@ -41,6 +42,8 @@ export function validate(raw: Record<string, unknown>): Definition {
   if (on_context_full !== "compact" && on_context_full !== "fail") throw new Error('definition: on_context_full must be "compact" or "fail"');
   const compact_at = raw.compact_at ?? 0.8;
   if (typeof compact_at !== "number" || !(compact_at > 0 && compact_at <= 1)) throw new Error("definition: compact_at must be a number in (0, 1]");
+  const ex = raw.sandbox_exclude;
+  if (ex !== undefined && (!Array.isArray(ex) || ex.some((p) => typeof p !== "string" || !p))) throw new Error("definition: sandbox_exclude must be a list of paths");
   const d: Definition = {
     name: raw.name as string,
     provider: raw.provider as string,
@@ -53,11 +56,12 @@ export function validate(raw: Record<string, unknown>): Definition {
   };
   if (raw.reasoning !== undefined) d.reasoning = raw.reasoning as Reasoning;
   if (raw.context !== undefined) d.context = raw.context as number;
+  if (ex !== undefined) d.sandbox_exclude = ex as string[];
   if (typeof raw.system === "string") d.system = raw.system;
   return d;
 }
 
-export const FIELDS = ["name", "provider", "model", "system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at"];
+export const FIELDS = ["name", "provider", "model", "system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude"];
 export const isMap = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 
 // Checks an apply-file section: a map of name: settings, known fields only.

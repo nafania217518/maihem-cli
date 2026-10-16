@@ -77,6 +77,14 @@ describe("main", () => {
       ]);
       expect(() => loadDefinition("a")).toThrow();
     });
+    it("definition add/update take --sandbox-exclude; --unset sandbox_exclude clears it", async () => {
+      await img("add", "--name", "a", "--provider", "op", "--model", "m", "--sandbox-exclude", "x/, y ,,");
+      expect(loadDefinition("a").sandbox_exclude).toEqual(["x/", "y"]);
+      expect(await img("update", "a", "--sandbox-exclude", "z")).toBe(0);
+      expect(loadDefinition("a").sandbox_exclude).toEqual(["z"]);
+      expect(await img("update", "a", "--unset", "sandbox_exclude")).toBe(0);
+      expect(loadDefinition("a").sandbox_exclude).toBeUndefined();
+    });
     it("definition update patches flags and --unset restores defaults", async () => {
       await img("add", "--name", "a", "--provider", "op", "--model", "m", "--no-sandbox", "--max-steps", "3", "--system", "s");
       expect(await img("update", "a", "--model", "m2", "--context", "500")).toBe(0);

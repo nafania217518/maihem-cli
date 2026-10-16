@@ -5,7 +5,7 @@ import type { Definition } from "./definition.ts";
 import type { Resolved } from "./providers.ts";
 import { encode, lineSplitter } from "./protocol.ts";
 import type { AgentEvent, ClientMessage } from "./protocol.ts";
-import { buildAgent, openBackend, printEvent, runFile } from "./run.ts";
+import { buildAgent, openBackend, printEvent, reportCopyOut, runFile } from "./run.ts";
 import { loadState, saveState } from "./state.ts";
 import { copyOut } from "./sync.ts";
 
@@ -15,7 +15,7 @@ export async function serveAgent(id: string, opts: { model?: LanguageModel } = {
   const state = loadState(id);
   const { def, task, provider, mode = "chat", allowEmpty } = JSON.parse(fs.readFileSync(runFile(id), "utf8")) as { def: Definition; task?: string; provider: Resolved; mode?: "run" | "chat"; allowEmpty?: boolean };
   const readonly = mode === "run";
-  const backend = await openBackend(def, id);
+  const { backend, snap } = await openBackend(def, id);
   const agent = buildAgent(def, provider, backend, opts.model, readonly, readonly && !allowEmpty);
   const clients = new Set<net.Socket>();
   let busy = false;
@@ -57,7 +57,7 @@ export async function serveAgent(id: string, opts: { model?: LanguageModel } = {
   const shutdown = (apply = true): Promise<void> => (closing ??= (async () => {
     server.close();
     for (const c of clients) c.end();
-    if (def.sandbox && apply) await copyOut(backend, def.workdir!);
+    if (def.sandbox && apply) reportCopyOut(await copyOut(backend, def.workdir!, snap!), (s) => process.stderr.write(s));
     saveState({ ...loadState(id), status: "exited", exitCode });
     fs.rmSync(runFile(id), { force: true });
     fs.rmSync(state.sock, { force: true });

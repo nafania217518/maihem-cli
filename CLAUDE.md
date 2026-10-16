@@ -22,3 +22,4 @@
 - ollama@0.6.4 ignores the abort signal that ai-sdk-ollama passes; model.ts calls client.abort() through stream middleware so an interrupt cancels the request : packages/cli/src/model.ts
 - Ollama MLX models ignore num_ctx and never report an overflow; MAIHEM tracks the context budget itself (`context` field) : packages/cli/src/compact.ts
 - ToolLoopAgent cannot take streamRetries or per-step toolChoice; the agent loop calls streamText directly : packages/cli/src/agent.ts
+- Sandbox copy goes file by file over the worker HTTP API (~2 ms per file); a 20,000-file / 1 GB guard and .maihemignore keep it usable : packages/cli/src/sync.ts

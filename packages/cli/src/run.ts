@@ -21,6 +21,7 @@ import { attach } from "./attach.ts";
 import { isAlive, logPath, newId, saveState, sockPath } from "./state.ts";
 import type { AgentState } from "./state.ts";
 import { copyIn, copyOut } from "./sync.ts";
+import type { Snapshot } from "./sync.ts";
 import { createTools } from "./tools.ts";
 import { ensureWorker } from "./worker.ts";
 
@@ -44,11 +45,19 @@ export function printEvent(e: AgentEvent): void {
 
 export const runFile = (id: string): string => path.join(home(), "agents", `${id}.run.json`);
 
-export async function openBackend(def: Definition, id: string): Promise<Backend> {
-  if (!def.sandbox) return createHostBackend(def.workdir!);
+export async function openBackend(def: Definition, id: string): Promise<{ backend: Backend; snap?: Snapshot }> {
+  if (!def.sandbox) return { backend: createHostBackend(def.workdir!) };
   const backend = createSandboxBackend(await ensureWorker(), id);
-  await copyIn(def.workdir!, backend);
-  return backend;
+  const snap = await copyIn(def.workdir!, backend, def.sandbox_exclude);
+  if (snap.symlinks) process.stderr.write(`sandbox: skipped ${snap.symlinks} symlinks\n`);
+  return { backend, snap };
+}
+
+export function reportCopyOut(r: { written: string[]; conflicts: string[] }, write: (s: string) => void): void {
+  if (midLine) process.stdout.write("\n");
+  midLine = false;
+  write(`sandbox: ${r.written.length} files copied back\n`);
+  for (const p of r.conflicts) write(`conflict: ${p} changed on the host and in the sandbox; sandbox copy saved as ${p}.sandbox\n`);
 }
 
 export function buildAgent(def: Definition, provider: Resolved, backend: Backend, model?: LanguageModel, oneShot = false, requireOutput = false): Agent {
@@ -116,7 +125,7 @@ export async function runCommand(args: RunArgs): Promise<number> {
   const state = newState(id, def, process.pid);
   saveState(state);
   console.error(id);
-  const backend = await openBackend(def, id);
+  const { backend, snap } = await openBackend(def, id);
   const agent = buildAgent(def, provider, backend, undefined, true, !args.allowEmpty);
   let exitCode = 0;
   let done: DoneEvent | undefined;
@@ -129,13 +138,13 @@ export async function runCommand(args: RunArgs): Promise<number> {
       else printEvent(e);
       if (e.type === "done" && e.incomplete) done = e;
     });
-    if (live) deps.stdout.write("\n");
+    if (live) { deps.stdout.write("\n"); midLine = false; }
     else if (step.trim()) deps.stdout.write(step + "\n");
   } catch (e) {
     console.error(`error: ${(e as Error).message}`);
     exitCode = 1;
   } finally {
-    if (def.sandbox) await copyOut(backend, def.workdir!);
+    if (def.sandbox) reportCopyOut(await copyOut(backend, def.workdir!, snap!), (s) => process.stderr.write(s));
   }
   if (done && exitCode === 0) { process.stderr.write(`incomplete: ${incompleteText(done)}\n`); exitCode = 2; }
   saveState({ ...state, status: "exited", exitCode, detail: done?.incomplete });

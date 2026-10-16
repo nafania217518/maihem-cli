@@ -20,7 +20,7 @@ import type { Kind, Provider } from "./providers.ts";
 
 const USAGE = `usage:
   maihem definition add --name N --provider P --model M [--system S] [--tools a,b] [--no-sandbox] [--max-steps N]
-      [--reasoning LEVEL] [--context N] [--on-context-full compact|fail] [--compact-at X]
+      [--reasoning LEVEL] [--context N] [--on-context-full compact|fail] [--compact-at X] [--sandbox-exclude a,b]
   maihem definition update NAME [same flags except --name] [--unset FIELD]...
   maihem definition rm NAME
   maihem definition ls
@@ -133,8 +133,9 @@ const DEF_OPTIONS = {
   name: { type: "string" }, provider: { type: "string" }, model: { type: "string" }, system: { type: "string" }, tools: { type: "string" },
   "no-sandbox": { type: "boolean" }, "max-steps": { type: "string" }, reasoning: { type: "string" }, context: { type: "string" },
   "on-context-full": { type: "string" }, "compact-at": { type: "string" }, unset: { type: "string", multiple: true },
+  "sandbox-exclude": { type: "string" },
 } as const;
-const DEF_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at"];
+const DEF_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude"];
 
 function definition(argv: string[]): boolean {
   const [sub, ...args] = argv;
@@ -144,6 +145,7 @@ function definition(argv: string[]): boolean {
     for (const k of ["provider", "model", "system", "reasoning"] as const) if (v[k] !== undefined) raw[k] = v[k];
     if (v["on-context-full"] !== undefined) raw.on_context_full = v["on-context-full"];
     if (v.tools !== undefined) raw.tools = splitTools(v.tools);
+    if (v["sandbox-exclude"] !== undefined) raw.sandbox_exclude = splitTools(v["sandbox-exclude"]);
     if (v["no-sandbox"]) raw.sandbox = false;
     for (const [f, k] of [["max-steps", "max_steps"], ["context", "context"], ["compact-at", "compact_at"]] as const) if (v[f] !== undefined) raw[k] = Number(v[f]);
     for (const f of v.unset ?? []) {

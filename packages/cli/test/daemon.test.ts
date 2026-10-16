@@ -18,7 +18,7 @@ const steps = () => [
   stream([{ type: "tool-call", toolCallId: "c1", toolName: "write", input: JSON.stringify({ path: "out.txt", content: "data" }) }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }]),
   stream([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "answer" }, { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "stop", raw: "" }, usage }]),
 ];
-const w = vi.hoisted(() => ({ ensureWorker: vi.fn(async () => "http://w"), createSandboxBackend: vi.fn(), copyIn: vi.fn(async () => 1), copyOut: vi.fn(async () => 1) }));
+const w = vi.hoisted(() => ({ ensureWorker: vi.fn(async () => "http://w"), createSandboxBackend: vi.fn(), copyIn: vi.fn(async () => ({ baseline: new Map(), excludes: [], files: 1, symlinks: 0 })), copyOut: vi.fn(async () => ({ written: [], conflicts: [] })) }));
 vi.mock("../src/worker.ts", () => ({ ensureWorker: w.ensureWorker }));
 vi.mock("../src/backend-sandbox.ts", () => ({ createSandboxBackend: w.createSandboxBackend }));
 vi.mock("../src/sync.ts", () => ({ copyIn: w.copyIn, copyOut: w.copyOut }));
@@ -133,9 +133,9 @@ describe("daemon", () => {
     w.createSandboxBackend.mockReturnValue(backend);
     const h = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
     expect(w.createSandboxBackend).toHaveBeenCalledWith("http://w", id);
-    expect(w.copyIn).toHaveBeenCalledWith(work, backend);
+    expect(w.copyIn).toHaveBeenCalledWith(work, backend, undefined);
     await h.shutdown();
-    expect(w.copyOut).toHaveBeenCalledWith(backend, work);
+    expect(w.copyOut).toHaveBeenCalledWith(backend, work, expect.objectContaining({ files: 1 }));
   });
   it("SIGTERM triggers shutdown", async () => {
     setup();

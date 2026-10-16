@@ -8,7 +8,7 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { main } from "../src/main.ts";
 import { listStates } from "../src/state.ts";
 import { Readable } from "node:stream";
-import { deps, launchCommand, printEvent, runFile } from "../src/run.ts";
+import { deps, launchCommand, printEvent, reportCopyOut, runFile } from "../src/run.ts";
 import { resolveRunArgs } from "../src/main.ts";
 import { saveProvider } from "../src/providers.ts";
 import { saveDefinition } from "../src/registry.ts";
@@ -29,7 +29,7 @@ vi.mock("../src/agent.ts", async (orig) => {
   return { ...real, createAgent: (o: unknown) => { fake.opts.push(o); return fake.agent ? fake.agent(o) : real.createAgent(o); } };
 });
 vi.mock("../src/model.ts", () => ({ createModel: () => modelImpl() }));
-const w = vi.hoisted(() => ({ ensureWorker: vi.fn(async () => "http://w"), createSandboxBackend: vi.fn(), copyIn: vi.fn(async () => 1), copyOut: vi.fn(async () => 1) }));
+const w = vi.hoisted(() => ({ ensureWorker: vi.fn(async () => "http://w"), createSandboxBackend: vi.fn(), copyIn: vi.fn(async () => ({ baseline: new Map(), excludes: [], files: 1, symlinks: 0 })), copyOut: vi.fn(async () => ({ written: [], conflicts: [] })) }));
 vi.mock("../src/worker.ts", () => ({ ensureWorker: w.ensureWorker, startWorker: w.ensureWorker, stopWorker: vi.fn(), workerStatus: vi.fn() }));
 vi.mock("../src/backend-sandbox.ts", () => ({ createSandboxBackend: w.createSandboxBackend }));
 vi.mock("../src/sync.ts", () => ({ copyIn: w.copyIn, copyOut: w.copyOut }));
@@ -165,11 +165,26 @@ describe("run", () => {
     expect(await main(args("do it"))).toBe(0);
     const [s] = listStates();
     expect(w.createSandboxBackend).toHaveBeenCalledWith("http://w", s.id);
-    expect(w.copyIn).toHaveBeenCalledWith(work, backend);
-    expect(w.copyOut).toHaveBeenCalledWith(backend, work);
+    expect(w.copyIn).toHaveBeenCalledWith(work, backend, undefined);
+    expect(w.copyOut).toHaveBeenCalledWith(backend, work, expect.objectContaining({ files: 1 }));
     expect(backend.writeFile).toHaveBeenCalledWith("out.txt", "data");
     const order = [w.ensureWorker, w.copyIn, w.copyOut].map((f) => f.mock.invocationCallOrder[0]);
     expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+  it("conflicts and the copied count are reported at the end of a sandboxed run", () => {
+    let s = "";
+    reportCopyOut({ written: ["a", "b"], conflicts: ["c.txt"] }, (x) => { s += x; });
+    expect(s).toBe("sandbox: 2 files copied back\nconflict: c.txt changed on the host and in the sandbox; sandbox copy saved as c.txt.sandbox\n");
+  });
+  it("the copy-back report starts on a new line after streamed text", () => {
+    const out = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    printEvent({ type: "text", delta: "answer" });
+    let s = "";
+    reportCopyOut({ written: [], conflicts: [] }, (x) => { s += x; });
+    reportCopyOut({ written: [], conflicts: [] }, () => {});
+    expect(out.mock.calls.map((c) => c[0])).toEqual(["answer", "\n"]);
+    expect(s).toBe("sandbox: 0 files copied back\n");
+    out.mockRestore();
   });
   it("copyOut runs and exit code is 1 when the agent throws", async () => {
     w.createSandboxBackend.mockReturnValue({ root: "/workspace" });

@@ -10,7 +10,6 @@ Multiple Agent In Harness Execution Manager. A CLI that runs AI agents the way D
 ## Requirements
 
 - Node 26 or newer. The CLI runs TypeScript directly, there is no build step.
-- `git` on PATH. Sandbox mode copies the working directory with `git ls-files`.
 - For an `ollama` provider, a running Ollama. For `openai` or `anthropic`, an API key.
 
 ## Install
@@ -38,7 +37,7 @@ rm -rf ~/.maihem                # optional: delete definitions, providers, agent
 # load the example providers and definitions (local-helper, reviewer, writer, translator)
 maihem apply -f examples/stack.yaml
 
-# one-shot task, sandboxed, in the current git repo
+# one-shot task, sandboxed, in the current directory
 maihem run local-helper "summarise README.md into SUMMARY.md"
 
 # same, but with real bash and real files in the current directory
@@ -107,7 +106,7 @@ maihem definition inspect reviewer
 maihem definition rm reviewer
 ```
 
-- `add` and `update` take one option per field (see the reference below): `--system`, `--tools a,b`, `--no-sandbox`, `--max-steps`, `--reasoning`, `--context`, `--on-context-full`, `--compact-at`.
+- `add` and `update` take one option per field (see the reference below): `--system`, `--tools a,b`, `--no-sandbox`, `--max-steps`, `--reasoning`, `--context`, `--on-context-full`, `--compact-at`, `--sandbox-exclude a,b`.
 - The provider must exist. Else `add` and `update` fail with the `maihem provider add` command to fix it.
 
 ### Tools
@@ -156,6 +155,7 @@ definitions:
     context: 64000                # optional: token budget that MAIHEM tracks; not sent to the provider
     on_context_full: compact      # compact (default) | fail
     compact_at: 0.8               # default 0.8: compact at this part of the budget
+    sandbox_exclude: [dist/]      # optional: more paths to keep out of the sandbox (see Sandbox mode)
 ```
 
 - `reasoning` is the AI SDK reasoning level. Each provider maps it to its own setting. Models without reasoning ignore it.
@@ -233,9 +233,31 @@ n discards the sandbox work.
 ## Sandbox mode
 
 - `maihem run` and `maihem launch` start the worker on first use (`maihem worker start|stop|status` to manage it).
-- At start, every file that `git ls-files --cached --others --exclude-standard` lists is copied to `/workspace`.
-- At exit, new and changed files are copied back, unless you discard them. Files are never deleted on the host.
+- At start, every regular file of the working directory is copied to `/workspace`. The directory does not have to be a git repository.
+- Symlinks are skipped and never followed. A link to a file outside the working directory cannot leak.
+- More than 20,000 files or 1 GB stops the start with the counts. Exclude paths or use `--no-sandbox`.
+- At exit, only the files that the agent changed are copied back. Files are never deleted on the host.
+- If you change a file on the host while the agent changes it too, your copy stays. The agent's copy goes next to it as `<file>.sandbox`, and the run prints a `conflict:` line.
 - The shell is `just-bash` in an isolate: `cat`, `grep`, `sed`, `awk`, `jq`, `curl` work. `npm`, `node`, `python` do not. Use `--no-sandbox` for those.
+
+### Excludes
+
+Put the paths to keep out of the sandbox in `.maihemignore` in the working directory. Add per-agent paths with the definition field `sandbox_exclude`.
+
+```
+# .maihemignore
+node_modules/
+.venv/
+target/
+.env*
+# with a slash: only from the working directory root
+docs/tmp
+```
+
+- A pattern without a slash matches at any depth. A pattern with a slash starts at the working directory. A trailing `/` makes no difference.
+- Patterns are globs (`*`, `**`, `?`). A line that starts with `#` is a comment; there are no comments after a pattern. There is no `!` negation.
+- Excluded paths are not copied in, not counted, and never copied back, even when the agent creates them.
+- Secrets: the agent can read every copied file and send it to the model provider. Exclude `.env` files and keys.
 
 ## State
 

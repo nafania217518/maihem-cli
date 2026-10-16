@@ -9,6 +9,11 @@ describe("definition", () => {
     expect(d.name).toBe("a");
     expect(d.system).toBe("hi");
   });
+  it("sandbox_exclude is a list of strings", () => {
+    expect(parseDefinition(JSON.stringify({ ...base, sandbox_exclude: ["a/", "b"] })).sandbox_exclude).toEqual(["a/", "b"]);
+    expect("sandbox_exclude" in parseDefinition(JSON.stringify(base))).toBe(false);
+    for (const bad of ["a", [1], [""]]) expect(() => parseDefinition(JSON.stringify({ ...base, sandbox_exclude: bad }))).toThrow("definition: sandbox_exclude must be a list of paths");
+  });
   it("loads json", () => {
     expect(parseDefinition(JSON.stringify({ ...base, tools: ["read"] })).tools).toEqual(["read"]);
   });
