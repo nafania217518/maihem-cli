@@ -1,3 +1,4 @@
+import { parseCount } from "./count.ts";
 import YAML from "yaml";
 
 export const TOOLS = ["read", "write", "edit", "list", "exec"] as const;
@@ -9,6 +10,7 @@ export interface Definition {
   provider: string;
   model: string;
   system?: string;
+  description?: string; // one line shown to other org members
   tools: Tool[];
   sandbox: boolean;
   workdir?: string;
@@ -37,13 +39,14 @@ export function validate(raw: Record<string, unknown>): Definition {
   const max_steps = raw.max_steps ?? 50;
   if (!Number.isInteger(max_steps) || (max_steps as number) < 1) throw new Error("definition: max_steps must be a positive integer");
   if (raw.reasoning !== undefined && !(REASONING as readonly unknown[]).includes(raw.reasoning)) throw new Error(`definition: unknown reasoning "${raw.reasoning}" (use ${REASONING.join(", ")})`);
-  if (raw.context !== undefined && (!Number.isInteger(raw.context) || (raw.context as number) < 1)) throw new Error("definition: context must be a positive integer");
+  const context = raw.context === undefined ? undefined : parseCount(raw.context, "definition: context");
   const on_context_full = raw.on_context_full ?? "compact";
   if (on_context_full !== "compact" && on_context_full !== "fail") throw new Error('definition: on_context_full must be "compact" or "fail"');
   const compact_at = raw.compact_at ?? 0.8;
   if (typeof compact_at !== "number" || !(compact_at > 0 && compact_at <= 1)) throw new Error("definition: compact_at must be a number in (0, 1]");
   const ex = raw.sandbox_exclude;
   if (ex !== undefined && (!Array.isArray(ex) || ex.some((p) => typeof p !== "string" || !p))) throw new Error("definition: sandbox_exclude must be a list of paths");
+  if (raw.description !== undefined && (typeof raw.description !== "string" || !raw.description)) throw new Error("definition: description must be text");
   const d: Definition = {
     name: raw.name as string,
     provider: raw.provider as string,
@@ -55,13 +58,14 @@ export function validate(raw: Record<string, unknown>): Definition {
     compact_at,
   };
   if (raw.reasoning !== undefined) d.reasoning = raw.reasoning as Reasoning;
-  if (raw.context !== undefined) d.context = raw.context as number;
+  if (context !== undefined) d.context = context;
   if (ex !== undefined) d.sandbox_exclude = ex as string[];
   if (typeof raw.system === "string") d.system = raw.system;
+  if (raw.description !== undefined) d.description = raw.description as string;
   return d;
 }
 
-export const FIELDS = ["name", "provider", "model", "system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude"];
+export const FIELDS = ["name", "provider", "model", "system", "description", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude"];
 export const isMap = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 
 // Checks an apply-file section: a map of name: settings, known fields only.

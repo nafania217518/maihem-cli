@@ -34,6 +34,6 @@ export function isOverflow(e: unknown): boolean {
 export async function compact(model: LanguageModel, ms: ModelMessage[], keepTokens: number, signal?: AbortSignal): Promise<ModelMessage[] | undefined> {
   const i = splitPoint(ms, keepTokens);
   if (i === undefined) return undefined;
-  const { text } = await generateText({ model, system: SUMMARY_PROMPT, prompt: JSON.stringify(ms.slice(0, i)), abortSignal: signal });
+  const { text } = await generateText({ model, system: SUMMARY_PROMPT, prompt: JSON.stringify(ms.slice(0, i)), abortSignal: signal, maxRetries: 0 });
   return [{ role: "user", content: "[Summary of earlier conversation]\n" + text }, ...ms.slice(i)];
 }

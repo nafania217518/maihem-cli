@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { LanguageModel } from "ai";
+import type { LanguageModel, ToolSet } from "ai";
 import type { Definition } from "./definition.ts";
 import type { Backend } from "./backend.ts";
 import { createAgent } from "./agent.ts";
@@ -25,6 +25,8 @@ import type { Snapshot } from "./sync.ts";
 import { createTools } from "./tools.ts";
 import { ensureWorker } from "./worker.ts";
 
+export interface OrgRef { name: string; member: string; db: string; ticket?: string; main: string; kind: "triage" | "work" | "review" | "reply"; batch?: string[] }
+
 type StdinKind = "tty" | "pipe" | "file" | "other";
 function stdinKind(): StdinKind {
   if (deps.stdin.isTTY) return "tty";
@@ -41,12 +43,14 @@ export function printEvent(e: AgentEvent): void {
   if (e.type === "text") { process.stdout.write(e.delta); if (e.delta) midLine = !e.delta.endsWith("\n"); }
   else if (e.type === "tool") { if (midLine) process.stdout.write("\n"); midLine = false; process.stderr.write(dim(`⚙ ${e.name}`) + "\n"); }
   else if (e.type === "tool-result") process.stderr.write(dim(`  → ${e.ok ? "✓" : "✗"} ${e.output.split("\n")[0].slice(0, 80)}`) + "\n");
+  else if (e.type === "error") process.stderr.write(dim(`error: ${e.message}`) + "\n");
+  else if (e.type === "done" && e.usage) process.stderr.write(dim(`tokens: ${e.usage.inputTokens ?? 0} in / ${e.usage.outputTokens ?? 0} out${e.steps ? `, ${e.steps} steps` : ""}`) + "\n");
 }
 
 export const runFile = (id: string): string => path.join(home(), "agents", `${id}.run.json`);
 
-export async function openBackend(def: Definition, id: string): Promise<{ backend: Backend; snap?: Snapshot }> {
-  if (!def.sandbox) return { backend: createHostBackend(def.workdir!) };
+export async function openBackend(def: Definition, id: string, home?: string): Promise<{ backend: Backend; snap?: Snapshot }> {
+  if (!def.sandbox) return { backend: createHostBackend(def.workdir!, home) };
   const backend = createSandboxBackend(await ensureWorker(), id);
   const snap = await copyIn(def.workdir!, backend, def.sandbox_exclude);
   if (snap.symlinks) process.stderr.write(`sandbox: skipped ${snap.symlinks} symlinks\n`);
@@ -60,9 +64,9 @@ export function reportCopyOut(r: { written: string[]; conflicts: string[] }, wri
   for (const p of r.conflicts) write(`conflict: ${p} changed on the host and in the sandbox; sandbox copy saved as ${p}.sandbox\n`);
 }
 
-export function buildAgent(def: Definition, provider: Resolved, backend: Backend, model?: LanguageModel, oneShot = false, requireOutput = false): Agent {
-  return createAgent({ model: model ?? createModel(def, provider), system: def.system, tools: createTools(backend, def.tools), maxSteps: def.max_steps,
-    reasoning: def.reasoning, context: def.context, onContextFull: def.on_context_full, compactAt: def.compact_at, oneShot, requireOutput });
+export function buildAgent(def: Definition, provider: Resolved, backend: Backend, model?: LanguageModel, oneShot = false, requireOutput = false, extraTools: ToolSet = {}, stopTools?: string[]): Agent {
+  return createAgent({ model: model ?? createModel(def, provider), system: def.system, tools: { ...createTools(backend, def.tools), ...extraTools }, maxSteps: def.max_steps,
+    reasoning: def.reasoning, context: def.context, onContextFull: def.on_context_full, compactAt: def.compact_at, oneShot, requireOutput, stopTools });
 }
 
 export function incompleteText(e: DoneEvent): string {
@@ -73,11 +77,11 @@ function newState(id: string, def: Definition, pid: number): AgentState {
   return { id, name: def.name, pid, status: "running", workdir: def.workdir!, sandbox: def.sandbox, started: new Date().toISOString(), log: logPath(id), sock: sockPath(id) };
 }
 
-export function spawnAgent(def: Definition, task: string | undefined, provider: Resolved, mode: "run" | "chat", allowEmpty = false): AgentState {
+export function spawnAgent(def: Definition, task: string | undefined, provider: Resolved, mode: "run" | "chat", allowEmpty = false, org?: OrgRef, name?: string): AgentState {
   const id = newId();
-  const state = newState(id, def, 0);
+  const state = { ...newState(id, def, 0), name: name ?? def.name };
   saveState(state);
-  fs.writeFileSync(runFile(id), JSON.stringify({ def, task, provider, mode, allowEmpty }), { mode: 0o600 });
+  fs.writeFileSync(runFile(id), JSON.stringify({ def, task, provider, mode, allowEmpty, org }), { mode: 0o600 });
   const binPath = fileURLToPath(new URL("../bin/maihem.js", import.meta.url));
   const logFd = fs.openSync(state.log, "a");
   const child = deps.spawn(process.execPath, [binPath, "__agent", id], { detached: true, stdio: ["ignore", logFd, logFd], env: process.env });

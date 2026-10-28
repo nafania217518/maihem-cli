@@ -5,6 +5,7 @@ Multiple Agent In Harness Execution Manager. A CLI that runs AI agents the way D
 - A **provider** holds the connection to a model API: kind, endpoint, key.
 - A **definition** is a stored agent configuration: provider, model, prompt, tools, limits.
 - An **agent** is a running instance of a definition, like a container.
+- An **org** is a declared development department: members with fixed roles, a ticket tracker with milestones and review, and an inbox for you.
 - The agent loop runs on your machine. Its sandbox is a [cloudflare/computer](https://github.com/cloudflare/computer) workspace: a durable filesystem plus a `just-bash` shell inside a local `wrangler dev` worker. No Docker needed.
 
 ## Requirements
@@ -123,12 +124,12 @@ A definition without `tools` gets all five. Paths are relative to the working di
 
 ## Configuration file
 
-`maihem apply -f FILE` loads providers and definitions from one YAML or JSON file:
+`maihem apply -f FILE` loads providers, definitions and orgs from one YAML or JSON file:
 
-- `providers:` and `definitions:` are maps. Each key is the name; its value holds the settings. Both maps are optional, but one must have entries.
+- `providers:`, `definitions:` and `orgs:` are maps. Each key is the name; its value holds the settings. All maps are optional, but one must have entries.
 - `apply` creates each entry, or replaces it fully if it exists.
 - It checks all entries before it saves one. Unknown fields are errors.
-- It saves the providers first, then the definitions. A definition can use a provider from the same file.
+- It saves the providers first, then the definitions, then the orgs. A definition can use a provider from the same file. The `orgs:` shape is in Orgs.
 - A plain `api_key` works but prints a warning. Use a reference like `$LAB_KEY` in files under version control.
 
 Every field, with its default:
@@ -152,7 +153,7 @@ definitions:
     sandbox: true                 # default true
     max_steps: 50                 # default 50
     reasoning: medium             # optional: none | minimal | low | medium | high | xhigh | max
-    context: 64000                # optional: token budget that MAIHEM tracks; not sent to the provider
+    context: 64k                  # optional: token budget that MAIHEM tracks; not sent to the provider; 64000 or 64k
     on_context_full: compact      # compact (default) | fail
     compact_at: 0.8               # default 0.8: compact at this part of the budget
     sandbox_exclude: [dist/]      # optional: more paths to keep out of the sandbox (see Sandbox mode)
@@ -198,7 +199,8 @@ With a task argument, `run` reads stdin only from a pipe or a file (`< FILE`).
 
 | Limit | Chat (`launch`) | One-shot (`run`, `run -d`) |
 |---|---|---|
-| `max_steps` | Notice in the chat. Send a message to continue. | One last step without tools summarises the work. Exit code 2. |
+| `max_steps` | Notice in the chat. Send a message to continue. | One last step without tools summarises the work. Exit code 2. In an org session the last step offers only the stop tools, so the session can still submit (models that reject forced tool use, such as Claude Fable 5.1 and Opus 5.5, get them as a normal choice). |
+| Stream cut (the stream ends without a finish reason) | Notice in the chat | Exit code 2 |
 | Output limit (answer cut) | Notice in the chat | Exit code 2 |
 | Context full (`fail` policy or after a failed compaction) | Notice in the chat | Exit code 2 |
 | No output (final step without text) | — | Exit code 2, unless `--allow-empty` |
@@ -207,6 +209,146 @@ With a task argument, `run` reads stdin only from a pipe or a file (`< FILE`).
 - `maihem ps` shows the reason, for example `idle (step limit)` or `exited (step limit)`.
 - Provider errors show the HTTP status and the number of attempts.
 - MAIHEM retries rate limits, server errors and broken streams 2 times. A failed turn keeps its finished steps.
+
+## Orgs
+
+An org is a small development department of agents. You give it a goal. The members write the requirements, plan a roadmap of milestones, break each milestone into tickets, and build the result. Every change lives on its own ticket branch. The ticket's reviewers check it, and an approved branch is squash-merged into main. Through the inbox, you answer the questions that reach you and approve the requirements and the final result.
+
+The full design is in [docs/org-design.md](docs/org-design.md).
+
+```bash
+maihem apply -f examples/org.yaml                 # providers, definitions and the demo org
+mkdir -p ~/maihem-demo && git -C ~/maihem-demo init
+maihem org start demo "a CLI that converts CSV to JSON"
+maihem org board demo                             # live board
+```
+
+### The grid
+
+Each role sits in one cell of a grid. The level sets the scope. The track sets the kind of content.
+
+| Level | Business track | Technical track |
+|---|---|---|
+| Strategic: the whole product | `ba` | `sa` |
+| Project: all milestones | `pm` | `tl` |
+| Cycle: one task inside a milestone | — | `dev` |
+
+| Role | Owns and decides |
+|---|---|
+| `ba` | Business requirements and the business summary. The final acceptance. |
+| `sa` | Technical requirements and the tech summary. Blocking links. Reviews every breakdown. |
+| `pm` | The roadmap and Triage: milestone, priority and assignee of each new ticket (the grid sets the reviewer), in one batch session. Writes no files. |
+| `tl` | The breakdown of each milestone into tickets. Reviews every dev ticket. The technical milestone acceptance. Writes no code. |
+| `dev` | The code of one ticket, its tests and its documentation. |
+
+- Every org has all five roles. BA, SA and PM have one member each. TL and DEV can have several.
+- A member asks a grid neighbour with `ask`: up and down its track and across its level. The ticket goes to Needs Reply. The answerer answers, or forwards up the track: DEV → TL → SA → you, PM → BA → you. You answer with `maihem org answer`.
+- Each role loads a small context at session start: its own documents and short summaries of its neighbours. A DEV never sees the business documents.
+- The role sets the duties, the tools and the rules. They are built in.
+- The definition sets the model, the style prompt and the step cap. The level sets the default reasoning: strategic `high`, project `medium`, cycle `low`. A `reasoning` field in the definition overrides it.
+
+```yaml
+orgs:
+  demo:
+    repo: ~/maihem-demo             # a git repository; its current branch is main
+    members:                        # name: { role, definition }
+      ba: { role: ba, definition: business-analyst }
+      sa: { role: sa, definition: solution-architect }
+      pm: { role: pm, definition: project-manager }
+      tl: { role: tl, definition: tech-lead }
+      dev1: { role: dev, definition: developer }
+      dev2: { role: dev, definition: developer }
+    limits: { parallel: 2, tokens: 2M }   # defaults: 1, no token limit
+```
+
+`limits` also takes `review_rounds` (3), `noop_sessions` (3), `retry_seconds` (30), `retry_max_seconds` (600) and `triage_chars` (300). A token count (`context`, `limits.tokens`, `--context`) takes a case-insensitive short form: `10k` = 10,000, `1.5M` = 1,500,000.
+
+The grid sets the reporting line, so there is no `reports_to`. One exception: with several TLs, each DEV names its TL, for example `dev1: { role: dev, definition: developer, reports_to: tl2 }`.
+
+### Lifecycle
+
+1. **Requirements.** `org start` creates milestone M0. BA writes `docs/business-requirements.md` and `docs/business-summary.txt`; SA reviews. Then SA writes `docs/technical-requirements.md` and `docs/tech-summary.txt`; BA reviews. A summary has at most 4,000 characters.
+2. **Your approval.** You approve the four files in one inbox item. Reject sends your text to BA and SA as two urgent update tickets.
+3. **Roadmap.** PM writes the milestones in order, each with its business scope and the requirement ids it covers. BA reviews coverage, TL reviews feasibility. A done milestone cannot change.
+4. **Each milestone:**
+   1. TL breaks the milestone into tickets with dependencies. SA reviews the breakdown.
+   2. The breakdown tickets wait in Triage. PM triages them in one batch: milestone and assignee. The grid sets the reviewer: DEV → TL, BA → SA, SA → BA. The devs build them. TL reviews each ticket.
+   3. When the work is done, TL accepts the milestone technically and PM reviews it against the business requirements. Defects become new tickets. A milestone whose breakdown creates no tickets still gets this acceptance: TL checks that main already serves its requirements.
+   4. If the milestone had work, SA updates the tech summary and cleans runtime data out of the repo (`.gitignore`). TL reviews.
+5. **Final acceptance.** BA checks the product against the business requirements; SA does the technical check. Then you approve. Approve ends the org. Reject starts a "Plan change" milestone: BA and SA update the documents, you approve them, and PM extends the roadmap. A changed requirement or a defect gets a new id (the old one is marked replaced), and PM plans the new ids in new milestones.
+
+Code creates these steps as urgent tickets, so the flow does not depend on the models.
+
+### Tickets
+
+A ticket has a status, a label (`bug` or `other`), a priority, an assignee, reviewers, a milestone, an optional parent, and relations (blocks, related, duplicate). Each action has its own tool, and the tool checks the guards. A member cannot set a wrong status by accident.
+
+| Status | Who moves the ticket here |
+|---|---|
+| Triage | A member creates a ticket, or a TL breakdown creates it. It waits for the PM's triage batch. |
+| Needs Reply | The assignee or a reviewer asks a question (`ask`). The ticket goes to the answerer and returns after `answer`. The system also parks a ticket here for you after 3 sessions with no progress. |
+| Todo | PM accepts a Triage ticket with a milestone and an assignee. Sub-tickets and system tickets start here. |
+| In Progress | The system, when the assignee's work session starts. A change request or a merge conflict also sends the ticket back here. |
+| In Review | The assignee submits with a summary. There must be a reviewer. |
+| Done | The system, after every reviewer approves. It squash-merges the branch first. |
+| Canceled | PM rejects a Triage ticket, or you cancel any open ticket with `maihem org cancel`. |
+| Duplicate | PM, in Triage. |
+
+- Done, Canceled and Duplicate are final. Nobody reopens a closed ticket.
+- Comments are a flat list. Only transitions and system notes write them: questions, answers, findings, reasons.
+- A blocked ticket gets no work session and cannot be submitted.
+- A milestone is a set of tickets with a completion percentage. The active milestone is the first one that is not complete. Work runs only on its tickets.
+- A dev's ticket always has a TL reviewer. Only the owner changes a requirements document or a summary.
+- Each submit resets all approvals. One change request sends the ticket back at once and stops the other reviews.
+
+### Commands
+
+```bash
+maihem org start demo "GOAL"                       # start the org daemon
+maihem org stop demo
+maihem org resume demo                             # continue a stopped org on its tracker, with the first goal
+maihem org board demo                              # timers, tokens vs limit, milestones, tickets, members, inbox, events
+maihem org log demo -f                             # event feed
+maihem org log demo --ticket T-3                   # one ticket's history
+maihem org inbox demo                              # approvals and the tickets waiting for you
+maihem org answer demo T-3 "plain commas only"     # answer a question; empty text: try again
+maihem org cancel demo T-3 "out of scope"
+maihem org assign demo T-3 dev2
+maihem org approve demo Q-2                        # or: maihem org reject demo Q-2 -m "add error handling"
+maihem org ticket demo T-3                         # fields, reviewers, relations, description, comments and history
+maihem org tickets demo --milestone M1 --status todo
+maihem org milestones demo                         # completion per milestone; marks the active one
+maihem org ls | inspect NAME | rm NAME
+```
+
+- The org must run for `answer`, `approve` and `reject` to take effect.
+- `--status` takes `triage`, `needs_reply`, `todo`, `in_progress`, `in_review`, `done`, `canceled` or `duplicate`.
+
+### Sessions, limits and pauses
+
+- Each member has its own worktree under `~/.maihem/orgs/NAME/worktrees/<member>`. Work happens on one branch per ticket (`t-3-login-form`). Nobody works in the main checkout, and the members never run git.
+- The ticket status sets the session kind and its tools: triage (PM, one batch of Triage tickets), work (Todo, In Progress: the assignee), review (In Review: each pending reviewer), reply (Needs Reply: the answerer). Only a work session can write files. The changes of other sessions are discarded.
+- A session ends with its stop tool: `submit_review`, `ask`, `answer`, `forward`, `approve` or `request_changes`.
+- MAIHEM merges main into the branch at submit and before a rework session. A conflict leaves the markers in the files and writes a comment for the assignee.
+- `exec` in an org session runs with `HOME` set to `~/.maihem/orgs/NAME/home`, so a product under test never touches your real home directory. `PATH` stays.
+- When a session ends, MAIHEM commits its changes as the member. An approved branch is squash-merged into main with a `Reviewed-by:` line.
+- The cycle runs on every tick with a free slot. It scans the open tickets and starts the sessions they need. Slot order: Needs Reply, In Review, In Progress, Todo, Triage; then priority. The rest waits in the queue on the board.
+- The cycle skips blocked tickets, parents with open sub-tickets, Todo outside the active milestone, a dev's new ticket while it has one In Progress, and busy members and tickets. A member runs one session at a time. At most `parallel` sessions run in the org.
+- A transient provider failure (429, 5xx, an empty answer, a stream cut) backs the ticket off: `retry_seconds`, doubling, at most `retry_max_seconds`.
+- No-op cap: after `noop_sessions` sessions in a row with no transition, the ticket goes to Needs Reply for you with a note. Answer it (empty text: try again) or cancel it.
+- Review-round cap: after `review_rounds` change requests since the last answer, the ticket goes to Needs Reply for the reviewer's manager (SA and BA: you).
+- Before a checkout in a member's worktree, MAIHEM discards leftover changes. A session without write tools that left changes must call its stop tool twice: the second call discards them.
+- Idle: when an approval or a ticket waits for you, the org waits ("waiting for human" on the board). Otherwise it pauses with a digest of the open tickets.
+- These pause the org with an approval in your inbox: a run over `tokens`, a failed bus command, a dirty main checkout or a failed git command, and idle. Approve continues. Reject stops the org.
+- `org start` moves the previous run's tracker to `~/.maihem/orgs/NAME/history/`.
+
+Use strong models for org members. Results on the same goal (a CLI todo app; details in `issues.md`):
+
+| Models | Result |
+|---|---|
+| Claude Fable 5.1 (BA, SA) and Opus 5.5 (PM, TL, DEV) | Done in 40 min, 5.5M input tokens; requirements and final result approved at once |
+| Nemotron 3.5 Super (all roles) | Done in 4.5 h, 4.3M input tokens, one plan change |
+| Nemotron 3.5 Lightning, Qwen 3.5 9B | Stuck: shallow reviews, duplicate tickets, breakdown loops, hand debugging instead of tests |
 
 ## Chat
 
@@ -263,7 +405,8 @@ docs/tmp
 
 Everything lives under `~/.maihem` (override with `MAIHEM_HOME`):
 
-- `providers/<name>.yaml`, `definitions/<name>.yaml`
+- `providers/<name>.yaml`, `definitions/<name>.yaml`, `orgs/<name>.yaml`
+- `orgs/<name>/org.db` (tickets, milestones, comments, inbox, events), `orgs/<name>/org.log`, `orgs/<name>/worktrees/<member>`, `orgs/<name>/home` (the `HOME` of org sessions), `orgs/<name>/history/`
 - `agents/<id>.json` (state), `agents/<id>.log`, `agents/<id>.run.json` (while the agent runs)
 - `worker.json`, `worker.log`
 

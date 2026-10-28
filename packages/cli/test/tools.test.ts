@@ -22,7 +22,7 @@ describe("tools", () => {
   it("read returns file text or an error message", async () => {
     const t = createTools(fakeBackend({ "a.txt": "hello" }), ["read"]);
     expect(await call(t.read, { path: "a.txt" })).toBe("hello");
-    expect(await call(t.read, { path: "nope" })).toBe("error: ENOENT nope");
+    expect(await call(t.read, { path: "nope" })).toBe("error: nope does not exist; use list to see the files");
   });
   it("write stores content and reports", async () => {
     const files: Record<string, string> = {};
@@ -38,11 +38,30 @@ describe("tools", () => {
   it("edit replaces exactly one occurrence", async () => {
     const files = { f: "a b a", g: "a b", h: "x" };
     const t = createTools(fakeBackend(files), ["edit"]);
-    expect(await call(t.edit, { path: "f", old: "a", new: "c" })).toBe("error: old text is not unique");
-    expect(await call(t.edit, { path: "h", old: "a", new: "c" })).toBe("error: old text not found");
     expect(await call(t.edit, { path: "g", old: "a", new: "$&c" })).toBe("edited g");
     expect(files.g).toBe("$&c b");
-    expect(await call(t.edit, { path: "nope", old: "a", new: "c" })).toMatch(/^error: ENOENT/);
+  });
+  it("edit errors say how to fix them", async () => {
+    const t = createTools(fakeBackend({ f: "a b a", h: "x" }), ["edit"]);
+    expect(await call(t.edit, { path: "f", old: "a", new: "c" })).toBe("error: old text is not unique; include more surrounding lines");
+    expect(await call(t.edit, { path: "h", old: "a", new: "c" })).toBe("error: old text not found; read the file again and copy the exact text");
+  });
+  it("a missing path error points to list", async () => {
+    const b = fakeBackend();
+    b.readFile = async () => { throw Object.assign(new Error("not found: http://w/x"), { code: "ENOENT" }); };
+    const t = createTools(b, ["read", "edit", "list"]);
+    const hint = "error: x does not exist; use list to see the files";
+    expect(await call(t.read, { path: "x" })).toBe(hint);
+    expect(await call(t.edit, { path: "x", old: "a", new: "c" })).toBe(hint);
+    b.exec = async () => ({ stdout: "", stderr: "ls: x: No such file or directory", exitCode: 1 });
+    expect(await call(t.list, { path: "x" })).toBe(hint);
+  });
+  it("reading a directory points to list", async () => {
+    const b = fakeBackend();
+    b.readFile = async () => { throw Object.assign(new Error("EISDIR: illegal operation on a directory, read"), { code: "EISDIR" }); };
+    expect(await call(createTools(b, ["read"]).read, { path: "src" })).toBe("error: src is a directory; use list");
+    b.readFile = async () => { throw new Error('worker 500: {"error":"is a directory","code":"EISDIR"}'); };
+    expect(await call(createTools(b, ["read"]).read, { path: "src" })).toBe("error: src is a directory; use list");
   });
   it("list runs ls -la with quoted path and falls back to stderr", async () => {
     const b = fakeBackend();
@@ -51,6 +70,13 @@ describe("tools", () => {
     expect(await call(t.list, { path: "it's" })).toBe("ran ls -la 'it'\\''s'");
     b.exec = async () => ({ stdout: "", stderr: "no such dir", exitCode: 1 });
     expect(await call(t.list, { path: "x" })).toBe("no such dir");
+  });
+  it("list with an empty path lists the root", async () => {
+    const b = fakeBackend();
+    const t = createTools(b, ["list"]);
+    expect(await call(t.list, { path: "" })).toBe("ran ls -la '.'");
+    b.exec = async () => ({ stdout: "", stderr: "ls: no such file", exitCode: 1 });
+    expect(await call(t.list, { path: "" })).toBe("error: . does not exist; use list to see the files");
   });
   it("exec formats stdout, stderr and exit code, and truncates", async () => {
     const b = fakeBackend();

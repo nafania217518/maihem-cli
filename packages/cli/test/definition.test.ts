@@ -66,8 +66,9 @@ describe("definition", () => {
   });
 
   it("context must be a positive integer", () => {
-    for (const v of [0, -1, 1.5, "8k"]) expect(() => pd({ context: v })).toThrow(/context/);
+    for (const v of [0, -1, 1.5, "8x"]) expect(() => pd({ context: v })).toThrow("definition: context must be a positive integer");
     expect(pd({ context: 64000 }).context).toBe(64000);
+    expect(pd({ context: "8k" }).context).toBe(8000);
     expect(pd({}).context).toBeUndefined();
   });
 

@@ -11,10 +11,13 @@ import { loadProvider, saveProvider } from "../src/providers.ts";
 import net from "node:net";
 import { deps, runFile } from "../src/run.ts";
 import { lineSplitter } from "../src/protocol.ts";
+import { openTracker } from "../src/org/tracker.ts";
+import { dbFile, pidFile } from "../src/org/daemon.ts";
 
 import { PassThrough } from "node:stream";
 const w = vi.hoisted(() => ({ ensureWorker: vi.fn(async () => "http://w"), removeWorkspace: vi.fn(async () => {}) }));
-const d = vi.hoisted(() => ({ serveAgent: vi.fn() }));
+const d = vi.hoisted(() => ({ serveAgent: vi.fn(), runOrgMain: vi.fn() }));
+vi.mock("../src/org/daemon.ts", async (orig) => ({ ...(await orig<object>()), runOrgMain: d.runOrgMain }));
 vi.mock("../src/daemon.ts", async (orig) => {
   const m = await orig<Record<string, unknown>>();
   d.serveAgent.mockImplementation(m.serveAgent as never);
@@ -41,10 +44,76 @@ describe("main", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  describe("orgs", () => {
+    const yaml = (y: string) => { const f = path.join(home, "o.yaml"); fs.writeFileSync(f, y); return f; };
+    const ROLES = "{ba: {role: ba, definition: d1}, sa: {role: sa, definition: d1}, pm: {role: pm, definition: d1}, tl: {role: tl, definition: d1}, dev: {role: dev, definition: d1}}";
+    const ORG = `orgs:\n  acme: {repo: ~/r, members: ${ROLES}}\n`;
+    const DEFS = "providers:\n  op: {kind: openai}\ndefinitions:\n  d1: {provider: op, model: m}\n";
+    it("apply saves orgs after definitions", async () => {
+      expect(await main(["apply", "-f", yaml(DEFS + ORG)])).toBe(0);
+      expect(out()).toBe("created provider op\ncreated definition d1\ncreated org acme");
+      expect(await main(["apply", "-f", yaml(ORG)])).toBe(0);
+      expect(out()).toMatch(/replaced org acme$/);
+    });
+    it("apply rejects an org whose member definitions are unknown", async () => {
+      expect(await main(["apply", "-f", yaml(ORG)])).toBe(1);
+      expect(err.mock.calls[0][0]).toBe('error: org "acme": member "ba" uses unknown definition "d1"');
+      expect(fs.existsSync(path.join(home, "orgs"))).toBe(false);
+    });
+    it("apply rejects a workflows section", async () => {
+      expect(await main(["apply", "-f", yaml("workflows:\n  flow: []\n")])).toBe(1);
+      expect(err.mock.calls[0][0]).toBe('error: apply file: unknown section "workflows" (use providers, definitions, orgs)');
+    });
+    it("org ls, inspect and rm", async () => {
+      expect(await main(["org", "ls"])).toBe(0);
+      expect(out()).toBe("NAME  MEMBERS  REPO  STATUS");
+      await main(["apply", "-f", yaml(DEFS + ORG)]);
+      log.mockClear();
+      expect(await main(["org", "ls"])).toBe(0);
+      expect(out()).toBe("NAME  MEMBERS          REPO  STATUS\nacme  ba,sa,pm,tl,dev  ~/r   -");
+      log.mockClear();
+      expect(await main(["org", "inspect", "acme"])).toBe(0);
+      expect(out()).toMatch(/repo: ~\/r[\s\S]*role: dev/);
+      expect(await main(["org", "rm", "acme"])).toBe(0);
+      expect(out()).toMatch(/removed acme$/);
+      expect(await main(["org", "rm", "acme"])).toBe(1);
+      expect(await main(["org", "inspect"])).toBe(1);
+      expect(await main(["org"])).toBe(1);
+    });
+    it("org ls shows the run status from the org db", async () => {
+      await main(["apply", "-f", yaml(DEFS + ORG)]);
+      const t = openTracker(dbFile("acme"));
+      t.setMeta("state", { status: "running" });
+      t.close();
+      log.mockClear();
+      expect(await main(["org", "ls"])).toBe(0);
+      expect(out()).toMatch(/acme .* running$/);
+    });
+    it("org rm refuses a running org", async () => {
+      await main(["apply", "-f", yaml(DEFS + ORG)]);
+      fs.mkdirSync(path.dirname(pidFile("acme")), { recursive: true });
+      fs.writeFileSync(pidFile("acme"), String(process.pid));
+      expect(await main(["org", "rm", "acme"])).toBe(1);
+      expect(err.mock.calls[0][0]).toBe("error: org acme is running; stop it first: maihem org stop acme");
+    });
+    it("definition add takes --description", async () => {
+      saveProvider({ name: "op", kind: "openai" });
+      expect(await main(["definition", "add", "--name", "a", "--provider", "op", "--model", "m", "--description", "writes specs"])).toBe(0);
+      expect(loadDefinition("a").description).toBe("writes specs");
+      expect(await main(["definition", "update", "a", "--unset", "description"])).toBe(0);
+      expect(loadDefinition("a").description).toBeUndefined();
+      expect(() => parseDefinition(JSON.stringify({ name: "a", provider: "p", model: "m", description: "" }))).toThrow("definition: description must be text");
+    });
+  });
+
   describe("definition", () => {
     const img = (...a: string[]) => main(["definition", ...a]);
     const yaml = (y: string) => { const f = path.join(home, "i.yaml"); fs.writeFileSync(f, y); return f; };
     beforeEach(() => saveProvider({ name: "op", kind: "openai" }));
+    it("definition --context takes the short form", async () => {
+      expect(await img("add", "--name", "a", "--provider", "op", "--model", "gpt", "--context", "10k")).toBe(0);
+      expect(loadDefinition("a").context).toBe(10_000);
+    });
     it("definition add saves a definition and refuses an existing name", async () => {
       expect(await img("add", "--name", "a", "--provider", "op", "--model", "gpt", "--system", "hi", "--tools", "read,list", "--no-sandbox", "--max-steps", "7", "--reasoning", "low", "--context", "1000", "--on-context-full", "fail", "--compact-at", "0.5")).toBe(0);
       expect(out()).toBe("added a");
@@ -171,7 +240,7 @@ describe("main", () => {
     });
     it("maihem apply rejects unknown sections", async () => {
       expect(await main(["apply", "-f", yaml("providers:\n  z: {kind: ollama}\nfoo: 1\n")])).toBe(1);
-      expect(err.mock.calls[0][0]).toBe('error: apply file: unknown section "foo" (use providers, definitions)');
+      expect(err.mock.calls[0][0]).toBe('error: apply file: unknown section "foo" (use providers, definitions, orgs)');
       expect(await main(["apply", "-f", yaml("providers: {}\n")])).toBe(1);
       expect(await main(["apply", "-f", yaml("- 1\n")])).toBe(1);
       expect(() => loadProvider("z")).toThrow(/not found/);
@@ -330,6 +399,19 @@ describe("main", () => {
     expect(err.mock.calls[0][0]).not.toContain("--api-key KEY]\n  maihem run");
     expect(err.mock.calls[0][0]).toContain("maihem provider add --name NAME --kind openai|anthropic|ollama");
   });
+  it("usage lists org resume", async () => {
+    expect(await main(["bogus"])).toBe(1);
+    expect(String(err.mock.calls[0][0])).toContain("  maihem org stop NAME\n  maihem org resume NAME\n");
+  });
+  it("usage lists the org subcommands", async () => {
+    expect(await main(["bogus"])).toBe(1);
+    const u = String(err.mock.calls[0][0]);
+    for (const l of ["maihem org ls", "maihem org inspect NAME", "maihem org rm NAME", 'maihem org start NAME "GOAL"', "maihem org stop NAME",
+      "maihem org log NAME [-f] [--ticket T-n]", "maihem org board NAME", "maihem org inbox NAME",
+      "maihem org approve NAME Q-n [-m TEXT]", "maihem org reject NAME Q-n -m TEXT", "maihem org answer NAME T-n TEXT",
+      "maihem org cancel NAME T-n REASON", "maihem org assign NAME T-n MEMBER", "maihem org ticket NAME T-n",
+      "maihem org tickets NAME [--milestone M] [--status S]", "maihem org milestones NAME"]) expect(u).toContain(`  ${l}\n`);
+  });
   it("unknown command returns 1 with usage", async () => {
     expect(await main(["bogus"])).toBe(1);
     expect(err.mock.calls[0][0]).toMatch(/usage/i);
@@ -353,7 +435,7 @@ describe("main", () => {
     expect(out).toBe("hello log");
   });
   it("attach/logs/__agent without id return usage", async () => {
-    for (const c of ["attach", "logs", "__agent"]) expect(await main([c])).toBe(1);
+    for (const c of ["attach", "logs", "__agent", "__org"]) expect(await main([c])).toBe(1);
   });
   it("run and launch start a definition by name", () => {
     saveDefinition(def("reg"));
@@ -481,6 +563,21 @@ describe("main", () => {
     const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     await main(["__agent", "x"]);
     expect(exit).toHaveBeenCalledWith(0);
+    exit.mockRestore();
+  });
+  it("__org runs the org daemon and exits", async () => {
+    d.runOrgMain.mockResolvedValueOnce(undefined);
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    await main(["__org", "acme"]);
+    expect(d.runOrgMain).toHaveBeenCalledWith("acme");
+    expect(exit).toHaveBeenCalledWith(0);
+    exit.mockRestore();
+  });
+  it("__org --resume resumes the org daemon", async () => {
+    d.runOrgMain.mockResolvedValueOnce(undefined);
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    await main(["__org", "acme", "--resume"]);
+    expect(d.runOrgMain).toHaveBeenCalledWith("acme", true);
     exit.mockRestore();
   });
 });

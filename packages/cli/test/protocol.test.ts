@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { encode, lineSplitter } from "../src/protocol.ts";
+import type { ClientMessage } from "../src/protocol.ts";
 
 describe("protocol", () => {
   it("encode ends with newline", () => {
@@ -33,5 +34,11 @@ describe("protocol", () => {
     const feed = lineSplitter((o) => got.push(o));
     feed("nope\n");
     expect(got).toEqual([{ type: "error", message: "bad line: nope" }]);
+  });
+  it("a client can send an inject message", () => {
+    const m: ClientMessage = { type: "inject", text: "also check b" };
+    const got: unknown[] = [];
+    lineSplitter((o) => got.push(o))(encode(m));
+    expect(got).toEqual([{ type: "inject", text: "also check b" }]);
   });
 });

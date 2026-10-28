@@ -54,4 +54,10 @@ describe("compact", () => {
     expect(JSON.stringify(call.prompt[0])).toContain(JSON.stringify(SUMMARY_PROMPT).slice(1, 40));
     expect(await compact(model, [u("a")], 10000)).toBeUndefined();
   });
+
+  it("a compaction error is not retried by the AI SDK", async () => {
+    const model = new MockLanguageModelV4({ doGenerate: async () => { throw new APICallError({ message: "overloaded", url: "u", requestBodyValues: {}, statusCode: 503, responseHeaders: { "retry-after-ms": "0" } }); } });
+    await expect(compact(model, [u("x".repeat(400)), a("y".repeat(400)), u("last")], 10)).rejects.toThrow("overloaded");
+    expect(model.doGenerateCalls.length).toBe(1);
+  });
 });

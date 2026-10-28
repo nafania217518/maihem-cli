@@ -1,0 +1,76 @@
+# A small development department. Load with: maihem apply -f examples/org.yaml
+# Then: mkdir -p ~/maihem-demo && git -C ~/maihem-demo init
+#       maihem org start demo "a CLI that converts CSV to JSON"
+#       maihem org board demo
+# The grid: strategic level ba (business) and sa (technical); project level pm and tl; cycle level dev.
+# Questions go up the track: dev > tl > sa > you, pm > ba > you. The definition sets the reasoning;
+# the level gives the default when a definition omits it (high, medium, low).
+# The role sets the duties, tools and rules; the definition sets the model and style.
+providers:
+  ollama:
+    kind: ollama
+definitions:
+  business-analyst:
+    provider: ollama
+    model: qwen3.5:9b-mlx
+    reasoning: high  # the level default; strategic high, project medium, cycle low
+    context: 230k
+    description: Business requirements and the business summary; the final acceptance.
+    tools: [read, write, edit, list]
+    system: |
+      Keep the documents short and testable. Speak for the customer.
+  solution-architect:
+    provider: ollama
+    model: qwen3.5:9b-mlx
+    reasoning: high  # the level default; strategic high, project medium, cycle low
+    context: 230k
+    description: Technical requirements and the tech summary; reviews every milestone breakdown.
+    tools: [read, write, edit, list, exec]
+    system: |
+      Prefer the standard library and few dependencies. Write down the design before the code exists.
+  project-manager:
+    provider: ollama
+    model: qwen3.5:9b-mlx
+    reasoning: medium  # the level default; strategic high, project medium, cycle low
+    context: 230k
+    description: The roadmap, Triage, priority and assignment.
+    tools: []  # PM gets no file tools; it works the tracker
+    system: |
+      Keep milestones small: each one delivers a working increment.
+  tech-lead:
+    provider: ollama
+    model: qwen3.5:9b-mlx
+    reasoning: medium  # the level default; strategic high, project medium, cycle low
+    context: 230k
+    description: Breaks each milestone into tickets; reviews the developers' work; accepts each milestone.
+    tools: [read, list, exec]  # TL reads and runs checks; it writes no code
+    system: |
+      Keep the plan lean: the fewest tickets that deliver the scope.
+  developer:
+    provider: ollama
+    model: qwen3.5:9b-mlx
+    reasoning: low  # the level default; strategic high, project medium, cycle low
+    context: 230k
+    description: Implements tickets in the repo.
+    tools: [read, write, edit, list, exec]
+    max_steps: 200  # dev tickets need many steps; the default is 50
+    system: |
+      Change only what the ticket asks for.
+orgs:
+  demo:
+    repo: ~/maihem-demo
+    members:                       # no reports_to: the grid sets the line (a dev names its TL only with several TLs)
+      ba: { role: ba, definition: business-analyst }
+      sa: { role: sa, definition: solution-architect }
+      pm: { role: pm, definition: project-manager }
+      tl: { role: tl, definition: tech-lead }
+      dev1: { role: dev, definition: developer }
+      dev2: { role: dev, definition: developer }
+    limits:
+      parallel: 2
+      tokens: 2M            # short form: 10k = 10,000, 1.5M = 1,500,000
+      # review_rounds: 3    # change requests since the last answer before the reviewer's manager decides
+      # noop_sessions: 3    # sessions in a row with no transition before the ticket waits for you
+      # retry_seconds: 30   # first backoff after a transient failure; it doubles
+      # retry_max_seconds: 600
+      # triage_chars: 300   # where triage lists cut each description

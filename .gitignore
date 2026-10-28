@@ -2,3 +2,4 @@ node_modules/
 coverage/
 .wrangler/
 packages/worker/worker-configuration.d.ts
+.DS_Store

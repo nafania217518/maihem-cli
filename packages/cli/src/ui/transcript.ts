@@ -59,9 +59,14 @@ const NOTICE: Record<Incomplete, string> = {
   "context full": "Context full",
   "content filter": "Stopped by the content filter",
   "no output": "Finished without output",
+  "stream cut": "The provider stream ended without a finish reason",
 };
 const clock = (at: number) => new Date(at).toTimeString().slice(0, 8);
-export const k = (n: number) => (n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n));
+// 12345 → 12.3k, 2013877 → 2M, then B and T
+export const k = (n: number, digits = 1): string => {
+  const i = n < 1000 ? -1 : Math.min(3, Math.floor(Math.log10(n) / 3) - 1);
+  return i < 0 ? String(n) : `${+(n / 1000 ** (i + 1)).toFixed(digits)}${"kMBT"[i]}`;
+};
 
 // Prefix the first line with `first`, the rest with `rest`; wrap the content to fit.
 function gutter(lines: string[], width: number, first: string, rest: string, color = (s: string) => s): string[] {

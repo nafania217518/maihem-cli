@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Backend, ExecResult } from "./backend.ts";
 
 const TIMEOUT_MS = 120_000;
 
-export function createHostBackend(root: string): Backend {
+// home: an org session's scratch HOME, so the product it runs does not touch the user's real dotfiles
+export function createHostBackend(root: string, home?: string): Backend {
+  if (home) fsSync.mkdirSync(home, { recursive: true });
   const abs = (p: string): string => path.resolve(root, p);
   return {
     root,
@@ -16,7 +19,7 @@ export function createHostBackend(root: string): Backend {
     },
     exec(command, cwd) {
       return new Promise<ExecResult>((resolve, reject) => {
-        const child = spawn("bash", ["-lc", command], { cwd: abs(cwd ?? ".") });
+        const child = spawn("bash", ["-lc", command], { cwd: abs(cwd ?? "."), ...(home && { env: { ...process.env, HOME: home } }) });
         let stdout = "";
         let stderr = "";
         let timedOut = false;

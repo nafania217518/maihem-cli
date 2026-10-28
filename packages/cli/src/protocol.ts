@@ -1,8 +1,8 @@
-export type ClientMessage = { type: "msg"; text: string } | { type: "stop"; apply: boolean } | { type: "interrupt" };
+export type ClientMessage = { type: "msg"; text: string } | { type: "stop"; apply: boolean } | { type: "interrupt" } | { type: "inject"; text: string };
 
 type Stamped<T> = T & { at?: number };
 
-export type Incomplete = "step limit" | "output limit" | "context full" | "content filter" | "no output";
+export type Incomplete = "step limit" | "output limit" | "context full" | "content filter" | "no output" | "stream cut";
 
 export type AgentEvent =
   | { type: "hello"; name: string; model: string; provider: string; sandbox: boolean; id: string; readonly: boolean; workdir: string; history: AgentEvent[] }

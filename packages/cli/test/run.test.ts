@@ -8,7 +8,7 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { main } from "../src/main.ts";
 import { listStates } from "../src/state.ts";
 import { Readable } from "node:stream";
-import { deps, launchCommand, printEvent, reportCopyOut, runFile } from "../src/run.ts";
+import { deps, launchCommand, spawnAgent, printEvent, reportCopyOut, runFile } from "../src/run.ts";
 import { resolveRunArgs } from "../src/main.ts";
 import { saveProvider } from "../src/providers.ts";
 import { saveDefinition } from "../src/registry.ts";
@@ -229,6 +229,14 @@ describe("run", () => {
     expect(JSON.parse(fs.readFileSync(runFile(s.id), "utf8"))).toMatchObject({ task: "x", mode: "run", def: { sandbox: false } });
     expect(w.ensureWorker).not.toHaveBeenCalled();
   });
+  it("spawnAgent writes the org reference and the display name", () => {
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 7, unref: vi.fn() } as never);
+    const org = { name: "acme", member: "ba", db: "/x/org.db", ticket: "T-1", main: "main", kind: "work" as const };
+    const def = { ...parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m" })), workdir: work, sandbox: false };
+    const s = spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run", true, org, "acme/ba");
+    expect(s.name).toBe("acme/ba");
+    expect(JSON.parse(fs.readFileSync(runFile(s.id), "utf8"))).toMatchObject({ org });
+  });
   const launch = (...a: string[]) => launchCommand(resolveRunArgs(args(...a).slice(1)));
   it("launch -d prints the id without attaching", async () => {
     vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
@@ -290,6 +298,16 @@ describe("run", () => {
     printEvent({ type: "tool-result", id: "c1", name: "x", ok: true, output: "line one " + "y".repeat(100) + "\nline two" });
     printEvent({ type: "tool-result", id: "c2", name: "x", ok: false, output: "bad" });
     expect(err).toBe(`\x1b[2m  → ✓ ${("line one " + "y".repeat(100)).slice(0, 80)}\x1b[0m\n\x1b[2m  → ✗ bad\x1b[0m\n`);
+  });
+  it("printEvent shows input and output tokens and steps of a done event on stderr", () => {
+    printEvent({ type: "done", usage: { inputTokens: 1200, outputTokens: 34 }, steps: 3 });
+    printEvent({ type: "done", usage: { outputTokens: 5 } });
+    printEvent({ type: "done" });
+    expect(err).toBe("\x1b[2mtokens: 1200 in / 34 out, 3 steps\x1b[0m\n\x1b[2mtokens: 0 in / 5 out\x1b[0m\n");
+  });
+  it("printEvent shows an error event on stderr", () => {
+    printEvent({ type: "error", message: "boom" });
+    expect(err).toBe("\x1b[2merror: boom\x1b[0m\n");
   });
   it("printEvent starts a tool on a new line after answer text", () => {
     const log: string[] = [];

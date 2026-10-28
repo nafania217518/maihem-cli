@@ -1,14 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { simulateReadableStream } from "ai";
+import { APICallError, simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
+import type { LanguageModelV4, LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { serveAgent } from "../src/daemon.ts";
 import { encode, lineSplitter } from "../src/protocol.ts";
 import type { AgentEvent } from "../src/protocol.ts";
+import { openTracker } from "../src/org/tracker.ts";
+import { saveOrg } from "../src/org/store.ts";
 import { runFile } from "../src/run.ts";
 import { loadState, logPath, saveState } from "../src/state.ts";
 
@@ -29,6 +32,8 @@ vi.mock("../src/agent.ts", async (orig) => {
 });
 const stepLimitAgent = () => ({ history: [], interrupt: () => {}, run: async (_t: string, emit: (e: unknown) => void) => { emit({ type: "done", incomplete: "step limit", steps: 5 }); } });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// an org with every role
+const acme = (repo: string) => ({ name: "acme", repo, members: Object.fromEntries((["ba", "sa", "pm", "tl", "dev"] as const).map((r) => [r, { role: r, definition: "bot" }])), limits: { parallel: 1 } });
 
 function client(sock: string): { events: AgentEvent[]; send(text: string): void; raw(m: object): void; wait(type: string, n?: number): Promise<void>; end(): void } {
   const events: AgentEvent[] = [];
@@ -65,6 +70,208 @@ describe("daemon", () => {
   });
   afterEach(async () => { await handle?.shutdown(); handle = undefined; fake.agent = undefined; vi.restoreAllMocks(); });
 
+  it("an org session logs session.started and session.ended with input and output tokens on its ticket", async () => {
+    setup({ task: "go" });
+    const db = path.join(work, "org.db");
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, org: { name: "acme", member: "ba", db, kind: "reply", ticket: "T-1", main: "main" } }));
+    const usage = { inputTokens: { total: 3, noCache: 3, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
+    saveOrg(acme(work));
+    const model = new MockLanguageModelV4({ doStream: [
+      stream([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "ok" }, { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "stop", raw: "" }, usage }]),
+    ] });
+    handle = await serveAgent(id, { model });
+    const t = openTracker(db);
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.ended"); i++) await sleep(20);
+    const ev = t.events().filter((e) => e.kind.startsWith("session."));
+    expect(ev.map((e) => e.kind)).toEqual(["session.started", "session.ended"]);
+    expect(ev[0]).toMatchObject({ actor: "ba", ticket: "T-1", data: { member: "ba", id } });
+    expect(ev[1]).toMatchObject({ actor: "ba", ticket: "T-1", data: { member: "ba", id, tokens: 4, input: 3, output: 1 } });
+    t.close();
+  });
+  it("session.ended carries the last text", async () => {
+    setup({ task: "go" });
+    const db = path.join(work, "org.db");
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, org: { name: "acme", member: "ba", db, kind: "reply", ticket: "T-1", main: "main" } }));
+    saveOrg(acme(work));
+    const long = "y".repeat(600);
+    const model = new MockLanguageModelV4({ doStream: [
+      stream([{ type: "text-start", id: "a" }, { type: "text-delta", id: "a", delta: "first" }, { type: "text-end", id: "a" },
+        { type: "tool-call", toolCallId: "c1", toolName: "write", input: JSON.stringify({ path: "out.txt", content: "data" }) }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }]),
+      stream([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "last " }, { type: "text-delta", id: "t", delta: long }, { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "stop", raw: "" }, usage }]),
+    ] });
+    handle = await serveAgent(id, { model });
+    const t = openTracker(db);
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.ended"); i++) await sleep(20);
+    expect(t.events().find((e) => e.kind === "session.ended")!.data.text).toBe(`last ${long}`.slice(0, 500));
+    t.close();
+  });
+
+  it("an org session that throws logs session.failed with the error on its ticket", async () => {
+    setup({ task: "go" });
+    const db = path.join(work, "org.db");
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, org: { name: "acme", member: "ba", db, kind: "reply", ticket: "T-1", main: "main" } }));
+    saveOrg(acme(work));
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: async () => { throw new Error("boom"); } }) });
+    const t = openTracker(db);
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.failed"); i++) await sleep(20);
+    const ev = t.events().filter((e) => e.kind.startsWith("session."));
+    expect(ev.map((e) => e.kind)).toEqual(["session.started", "session.failed"]);
+    expect(ev[1]).toMatchObject({ actor: "ba", ticket: "T-1", data: { member: "ba", id, error: "boom" } });
+    t.close();
+  });
+  it("an org session that ends with no output tokens and no tool call logs session.failed, not session.ended", async () => {
+    setup({ task: "go" });
+    const db = path.join(work, "org.db");
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, org: { name: "acme", member: "ba", db, kind: "reply", ticket: "T-1", main: "main" } }));
+    saveOrg(acme(work));
+    const empty = { inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 0, text: 0, reasoning: 0 } };
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: [stream([{ type: "finish", finishReason: { unified: "stop", raw: "" }, usage: empty }])] }) });
+    const t = openTracker(db);
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.failed" || e.kind === "session.ended"); i++) await sleep(20);
+    const ev = t.events().filter((e) => e.kind.startsWith("session."));
+    expect(ev.map((e) => e.kind)).toEqual(["session.started", "session.failed"]);
+    expect(ev[1]).toMatchObject({ actor: "ba", ticket: "T-1", data: { member: "ba", id, error: "empty answer: no output and no tool call" } });
+    t.close();
+    await handle.shutdown();
+    expect(loadState(id).exitCode).toBe(1);
+  });
+  it("an org session whose stream is cut logs session.failed with a stream cut error", async () => {
+    setup({ task: "go" });
+    const db = path.join(work, "org.db");
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, org: { name: "acme", member: "ba", db, kind: "reply", ticket: "T-1", main: "main" } }));
+    saveOrg(acme(work));
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: [stream([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "half" }, { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "other", raw: "" }, usage }])] }) });
+    const t = openTracker(db);
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.failed" || e.kind === "session.ended"); i++) await sleep(20);
+    const ev = t.events().filter((e) => e.kind.startsWith("session."));
+    expect(ev.map((e) => e.kind)).toEqual(["session.started", "session.failed"]);
+    expect(ev[1]).toMatchObject({ data: { error: "stream cut: the provider stream ended without a finish reason" } });
+    t.close();
+    await handle.shutdown();
+    expect(loadState(id).exitCode).toBe(1);
+  });
+  it("an invalid tool input logs the full validation error", async () => {
+    setup({ task: "go" });
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: [
+      stream([{ type: "tool-call", toolCallId: "c1", toolName: "write", input: JSON.stringify({ path: 5 }) }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }]),
+      steps()[1]] }) });
+    for (let i = 0; i < 100 && !err.mock.calls.some((c) => String(c[0]).includes("tokens:")); i++) await sleep(20);
+    const log = err.mock.calls.map((c) => String(c[0])).join("");
+    err.mockRestore();
+    expect(log).toContain("Invalid input for tool write");
+    expect(log).toContain('{"path":5}');
+    expect(log).toMatch(/path[\s\S]*expected string/i);
+  });
+  // a git repo in the workdir: main has one commit; branch t-1-a adds a.txt
+  const gitRepo = () => {
+    const g = (...a: string[]) => execFileSync("git", ["-c", "user.name=u", "-c", "user.email=u@x", ...a], { cwd: work });
+    g("init", "-q", "-b", "main"); g("commit", "-q", "--allow-empty", "-m", "init"); g("checkout", "-q", "-b", "t-1-a");
+    fs.writeFileSync(path.join(work, "a.txt"), "hi\n"); g("add", "-A"); g("commit", "-qm", "a"); g("checkout", "-q", "main");
+    return g;
+  };
+  const orgSession = (member: string, kind: string) => {
+    setup({ task: "go" });
+    const db = path.join(process.env.MAIHEM_HOME!, "org.db");
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, org: { name: "acme", member, db, kind, ticket: "T-1", main: "main" } }));
+    saveOrg(acme(work));
+    return openTracker(db);
+  };
+  it("an org session's review_diff shows the diff of the ticket branch against main", async () => {
+    gitRepo();
+    const t = orgSession("tl", "review");
+    t.createTicket({ title: "a", status: "in_review", assignee: "dev" }, "org"); t.setApproval("T-1", "tl", "pending", "org"); t.setBranch("T-1", "t-1-a", "org");
+    const model = new MockLanguageModelV4({ doStream: [
+      stream([{ type: "tool-call", toolCallId: "c1", toolName: "review_diff", input: "{}" }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }]),
+      stream([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "ok" }, { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "stop", raw: "" }, usage }]),
+    ] });
+    handle = await serveAgent(id, { model });
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.ended"); i++) await sleep(20);
+    expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain("+hi");
+    t.close();
+  });
+  it("a stop tool in a session without write tools sees the dirty-worktree guard", async () => {
+    gitRepo();
+    fs.writeFileSync(path.join(work, ".gitignore"), "keep.log\n");
+    fs.writeFileSync(path.join(work, "keep.log"), "k");
+    const t = orgSession("tl", "review");
+    t.createTicket({ title: "a", status: "in_review", assignee: "dev" }, "org"); t.setApproval("T-1", "tl", "pending", "org"); t.setBranch("T-1", "t-1-a", "org");
+    fs.writeFileSync(path.join(work, "junk.txt"), "j");
+    const approve = stream([{ type: "tool-call", toolCallId: "c1", toolName: "approve", input: "{}" }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }]);
+    const model = new MockLanguageModelV4({ doStream: [approve, { ...approve, stream: simulateReadableStream({ chunks: [{ type: "tool-call", toolCallId: "c2", toolName: "approve", input: "{}" }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }] }) }] });
+    handle = await serveAgent(id, { model });
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.ended"); i++) await sleep(20);
+    expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain("your worktree has changes (.gitignore, junk.txt)");
+    expect(fs.existsSync(path.join(work, "junk.txt"))).toBe(false);
+    expect(fs.existsSync(path.join(work, "keep.log"))).toBe(true);
+    expect(t.getTicket("T-1").approvals).toMatchObject([{ reviewer: "tl", state: "approved" }]);
+    t.close();
+  });
+  // a submit_review session of `member` on T-1 (reviewer `reviewer`) after writing docs/<file>: the ticket status and the
+  // model's prompts (a refused submit does not end the turn)
+  const submitWith = async (member: string, reviewer: string, file: string, text: string, emptyDir?: string) => {
+    const g = gitRepo();
+    g("checkout", "-q", "t-1-a");
+    fs.mkdirSync(path.join(work, "docs"));
+    if (emptyDir) fs.mkdirSync(path.join(work, emptyDir));
+    fs.writeFileSync(path.join(work, "docs", file), text);
+    const t = orgSession(member, "work");
+    t.createTicket({ title: "a", status: "in_progress", assignee: member }, "org"); t.setApproval("T-1", reviewer, "pending", "org");
+    const model = new MockLanguageModelV4({ doStream: [
+      stream([{ type: "tool-call", toolCallId: "c1", toolName: "submit_review", input: JSON.stringify({ summary: "did it" }) }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }]),
+      stream([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "late" }, { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "stop", raw: "" }, usage }]),
+    ] });
+    handle = await serveAgent(id, { model });
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.ended"); i++) await sleep(20);
+    expect(String(g("status", "--porcelain")).trim()).toBe("?? docs/"); // no branch on the ticket: no commit, no merge
+    const status = t.getTicket("T-1").status;
+    t.close();
+    return { status, prompts: model.doStreamCalls.map((c) => JSON.stringify(c.prompt)) };
+  };
+  it("an org session ends its turn after a stop tool", async () => {
+    const r = await submitWith("ba", "sa", "business-summary.txt", "x".repeat(4000));
+    expect(r.status).toBe("in_review");
+    expect(r.prompts).toHaveLength(1);
+  });
+  it("submit_review passes the changed files", async () => {
+    const r = await submitWith("dev", "tl", "business-requirements.md", "# BR\n");
+    expect(r.status).toBe("in_progress");
+    expect(r.prompts[1]).toContain("docs/business-requirements.md belongs to BA");
+  });
+  it("submit_review passes the size of each changed file", async () => {
+    const r = await submitWith("ba", "sa", "business-summary.txt", "x".repeat(4001));
+    expect(r.status).toBe("in_progress");
+    expect(r.prompts[1]).toContain("docs/business-summary.txt has 4001 characters; the cap is 4000");
+  });
+  it("submit_review checks the workdir for empty directories", async () => {
+    const r = await submitWith("dev", "tl", "notes.md", "n\n", "tests");
+    expect(r.status).toBe("in_progress");
+    expect(r.prompts[1]).toContain("tests/ is empty, and git does not store empty directories");
+  });
+  it("a work session's submit_review commits the work and merges main into the branch first", async () => {
+    const g = gitRepo();
+    fs.writeFileSync(path.join(work, "b.txt"), "main\n"); g("add", "-A"); g("commit", "-qm", "b on main");
+    g("checkout", "-q", "t-1-a");
+    fs.writeFileSync(path.join(work, "c.txt"), "work\n");
+    const t = orgSession("dev", "work");
+    t.createTicket({ title: "a", status: "in_progress", assignee: "dev" }, "org"); t.setApproval("T-1", "tl", "pending", "org"); t.setBranch("T-1", "t-1-a", "org");
+    const model = new MockLanguageModelV4({ doStream: [
+      stream([{ type: "tool-call", toolCallId: "c1", toolName: "submit_review", input: JSON.stringify({ summary: "did it" }) }, { type: "finish", finishReason: { unified: "tool-calls", raw: "" }, usage }]),
+    ] });
+    handle = await serveAgent(id, { model });
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.ended"); i++) await sleep(20);
+    expect(t.getTicket("T-1").status).toBe("in_review");
+    expect(fs.readFileSync(path.join(work, "b.txt"), "utf8")).toBe("main\n");
+    expect(String(g("status", "--porcelain"))).toBe("");
+    expect(String(g("log", "--format=%an %s", "-2", "--first-parent")).trim()).toMatch(/^maihem Merge branch 'main' into t-1-a\ndev dev: T-1 a$/);
+    t.close();
+  });
   it("client gets hello and a msg yields events in order, file written", async () => {
     setup();
     handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
@@ -209,8 +416,11 @@ describe("daemon", () => {
     setup();
     fake.agent = () => ({ history: [], interrupt: () => {}, run: async () => {} });
     handle = await serveAgent(id);
-    const model = (fake.opts.at(-1) as { model: { config: { baseURL: string } } }).model;
-    expect(model.config.baseURL).toBe("http://snap");
+    const model = (fake.opts.at(-1) as { model: LanguageModelV4 }).model;
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
+    await Promise.resolve(model.doStream({ prompt: [{ role: "user", content: [{ type: "text", text: "x" }] }] })).catch(() => {});
+    expect(String(fetch.mock.calls[0][0])).toMatch(/^http:\/\/snap\//);
+    fetch.mockRestore();
     const c = client(handle.sock);
     await c.wait("hello");
     expect(c.events[0]).toMatchObject({ type: "hello", provider: "p1" });
@@ -285,5 +495,49 @@ describe("daemon", () => {
     await handle.shutdown();
     expect(loadState(id)).toMatchObject({ status: "exited", exitCode: 0 });
     c.end();
+  });
+  it("an inject message reaches the running agent even in read-only mode", async () => {
+    setup({ mode: "run", task: "go" });
+    const injected: string[] = [];
+    fake.agent = () => ({ history: [], interrupt: () => {}, inject: (t: string) => injected.push(t), run: async (_t: string, emit: (e: unknown) => void) => {
+      for (let i = 0; i < 100 && !injected.length; i++) await sleep(20);
+      emit({ type: "done" });
+    } });
+    const h = await serveAgent(id);
+    const c = client(h.sock);
+    await c.wait("hello");
+    c.raw({ type: "inject", text: "also check b" });
+    await h.done;
+    expect(injected).toEqual(["also check b"]);
+    expect(c.events.some((e) => e.type === "error")).toBe(false);
+  });
+  it("an org session logs session.capped on its ticket when a turn ends with step limit", async () => {
+    setup({ task: "go" });
+    const db = path.join(work, "org.db");
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, org: { name: "acme", member: "ba", db, kind: "reply", ticket: "T-1", main: "main" } }));
+    saveOrg(acme(work));
+    fake.agent = stepLimitAgent;
+    handle = await serveAgent(id);
+    const t = openTracker(db);
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.ended"); i++) await sleep(20);
+    const ev = t.events().filter((e) => e.kind.startsWith("session."));
+    expect(ev.map((e) => e.kind)).toEqual(["session.started", "session.capped", "session.ended"]);
+    expect(ev[1]).toMatchObject({ actor: "ba", ticket: "T-1", data: { member: "ba", id, steps: 5 } });
+    t.close();
+  });
+  it("session.failed carries the HTTP status of the error", async () => {
+    setup({ task: "go" });
+    const db = path.join(work, "org.db");
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, org: { name: "acme", member: "ba", db, kind: "reply", ticket: "T-1", main: "main" } }));
+    saveOrg(acme(work));
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: async () => {
+      throw new APICallError({ message: "overloaded", url: "x", requestBodyValues: {}, statusCode: 503, responseHeaders: { "retry-after-ms": "0" } });
+    } }) });
+    const t = openTracker(db);
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.failed"); i++) await sleep(20);
+    expect(t.events().find((e) => e.kind === "session.failed")).toMatchObject({ ticket: "T-1", data: { member: "ba", id, status: 503 } });
+    t.close();
   });
 });

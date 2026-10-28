@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { APICallError, simulateReadableStream, tool } from "ai";
+import { APICallError, RetryError, simulateReadableStream, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { z } from "zod";
@@ -228,6 +228,43 @@ describe("agent", () => {
     expect(JSON.stringify(model.doStreamCalls[2].prompt.at(-1))).toContain("step limit");
     expect(events.at(-1)).toMatchObject({ type: "done", incomplete: "step limit", steps: 2 });
   });
+  it("the step-limit wrap-up step offers only the stop tools", async () => {
+    const stop = { ...tools, ask: tool({ description: "ask", inputSchema: z.object({ s: z.string() }), execute: async () => "asked" }) };
+    const askStep = () => stream([{ type: "tool-call", toolCallId: "c2", toolName: "ask", input: JSON.stringify({ s: "q" }) }, finish("tool-calls")]);
+    const model = new MockLanguageModelV4({ doStream: [toolStep(), toolStep(), askStep()] });
+    const events: AgentEvent[] = [];
+    await createAgent({ model, tools: stop, maxSteps: 2, oneShot: true, stopTools: ["ask"] }).run("t", (e) => events.push(e));
+    expect(model.doStreamCalls.length).toBe(3);
+    expect(model.doStreamCalls[2].toolChoice).toEqual({ type: "required" });
+    expect(model.doStreamCalls[2].tools?.map((t) => t.name)).toEqual(["ask"]);
+    expect(JSON.stringify(model.doStreamCalls[2].prompt.at(-1))).toContain("Call submit_review");
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+    expect(events.at(-1)).not.toHaveProperty("incomplete");
+  });
+  it("a stream that ends without a finish reason is a stream cut", async () => {
+    const cut = stream([{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "half" }, { type: "text-end", id: "t" }, finish("other", usage, "")]);
+    const model = new MockLanguageModelV4({ doStream: [toolStep(), cut] });
+    const events: AgentEvent[] = [];
+    await createAgent({ model, tools, maxSteps: 5 }).run("t", (e) => events.push(e));
+    expect(events.at(-1)).toMatchObject({ type: "done", incomplete: "stream cut" });
+  });
+  it("a call to a stop tool ends the turn without an incomplete reason", async () => {
+    for (const oneShot of [false, true]) {
+      const model = new MockLanguageModelV4({ doStream: [toolStep(), textStep("late")] });
+      const events: AgentEvent[] = [];
+      await createAgent({ model, tools, maxSteps: 1, oneShot, stopTools: ["echo"] }).run("t", (e) => events.push(e));
+      expect(model.doStreamCalls.length).toBe(1);
+      expect(events.at(-1)).toMatchObject({ type: "done", steps: 1 });
+      expect(events.at(-1)).not.toHaveProperty("incomplete");
+    }
+  });
+  it("a stop tool that returns an error does not end the turn", async () => {
+    const bad = { echo: tool({ description: "echo", inputSchema: z.object({ s: z.string() }), execute: async () => "error: not yours" }) };
+    const model = new MockLanguageModelV4({ doStream: [toolStep(), textStep("next")] });
+    const text = await createAgent({ model, tools: bad, maxSteps: 5, stopTools: ["echo"] }).run("t", () => {});
+    expect(model.doStreamCalls.length).toBe(2);
+    expect(text).toBe("next");
+  });
   it("an empty final step marks a one-shot turn as no output", async () => {
     const model = new MockLanguageModelV4({ doStream: [toolStep(), stream([finish("stop")])] });
     const events: AgentEvent[] = [];
@@ -247,10 +284,22 @@ describe("agent", () => {
     expect(events.at(-1)).toMatchObject({ type: "done", incomplete: "step limit" });
   });
   it("error events carry status and attempts", async () => {
-    const model = new MockLanguageModelV4({ doStream: async () => { throw new APICallError({ message: "overloaded", url: "x", requestBodyValues: {}, statusCode: 503, responseHeaders: { "retry-after-ms": "0" } }); } });
+    const err = new APICallError({ message: "overloaded", url: "x", requestBodyValues: {}, statusCode: 503 });
+    const model = new MockLanguageModelV4({ doStream: async () => { throw new RetryError({ message: "Failed after 6 attempts", reason: "maxRetriesExceeded", errors: Array(6).fill(err) }); } });
     const events: AgentEvent[] = [];
     await expect(createAgent({ model, tools, maxSteps: 2 }).run("t", (e) => events.push(e))).rejects.toThrow();
-    expect(events.at(-1)).toMatchObject({ type: "error", message: "overloaded", status: 503, attempts: 3 });
+    expect(events.at(-1)).toMatchObject({ type: "error", message: "overloaded", status: 503, attempts: 6 });
+  });
+  it("a start error is not retried by the AI SDK", async () => {
+    const model = new MockLanguageModelV4({ doStream: async () => { throw new APICallError({ message: "overloaded", url: "x", requestBodyValues: {}, statusCode: 503, responseHeaders: { "retry-after-ms": "0" } }); } });
+    await expect(createAgent({ model, tools, maxSteps: 2 }).run("t", () => {})).rejects.toThrow();
+    expect(model.doStreamCalls.length).toBe(1);
+  });
+  it("an error with an empty message falls back to its name and status", async () => {
+    const model = new MockLanguageModelV4({ doStream: async () => { throw new APICallError({ message: "", url: "x", requestBodyValues: {}, statusCode: 404, isRetryable: false }); } });
+    const events: AgentEvent[] = [];
+    await expect(createAgent({ model, tools, maxSteps: 2 }).run("t", (e) => events.push(e))).rejects.toThrow();
+    expect(events.at(-1)).toMatchObject({ type: "error", message: "AI_APICallError 404", status: 404 });
   });
   it("finished steps stay after an error", async () => {
     let n = 0;
@@ -304,5 +353,31 @@ describe("agent", () => {
     await createAgent({ model, system: "s", tools, maxSteps: 5, context: 1000 }).run("t", (e) => events.push(e));
     expect(events.filter((e) => e.type === "context")).toEqual([expect.objectContaining({ used: 27 })]);
     expect(events.some((e) => e.type === "compacted")).toBe(false);
+  });
+  it("inject queues a user message that the next step sends to the model", async () => {
+    const model = new MockLanguageModelV4({ doStream: [toolStep(), textStep("ok"), textStep("ok2")] });
+    const agent = createAgent({ model, tools, maxSteps: 5 });
+    const events: AgentEvent[] = [];
+    await agent.run("t", (e) => { events.push(e); if (e.type === "tool") agent.inject("also check b"); });
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain("also check b");
+    expect(model.doStreamCalls[1].prompt.at(-1)).toMatchObject({ role: "user", content: [{ type: "text", text: "also check b" }] });
+    expect(events.filter((e) => e.type === "user").map((e) => (e as { text: string }).text)).toEqual(["t", "also check b"]);
+    await agent.run("next", () => {});
+    expect(JSON.stringify(model.doStreamCalls[2].prompt)).toContain("also check b");
+  });
+  it("inject outside a run is delivered at the start of the next run", async () => {
+    const model = new MockLanguageModelV4({ doStream: [textStep("ok")] });
+    const agent = createAgent({ model, tools, maxSteps: 5 });
+    agent.inject("note");
+    const events: AgentEvent[] = [];
+    await agent.run("t", (e) => events.push(e));
+    expect(model.doStreamCalls[0].prompt.slice(-2)).toMatchObject([{ role: "user", content: [{ text: "t" }] }, { role: "user", content: [{ text: "note" }] }]);
+    expect(events.filter((e) => e.type === "user").length).toBe(2);
+  });
+  it("several injects arrive in order", async () => {
+    const model = new MockLanguageModelV4({ doStream: [toolStep(), textStep("ok")] });
+    const agent = createAgent({ model, tools, maxSteps: 5 });
+    await agent.run("t", (e) => { if (e.type === "tool") { agent.inject("one"); agent.inject("two"); } });
+    expect(model.doStreamCalls[1].prompt.slice(-2)).toMatchObject([{ role: "user", content: [{ text: "one" }] }, { role: "user", content: [{ text: "two" }] }]);
   });
 });

@@ -14,18 +14,41 @@ import net from "node:net";
 import { attach } from "./attach.ts";
 import { serveAgent } from "./daemon.ts";
 import fs from "node:fs";
+import { pad } from "./pad.ts";
+import { orgCommand } from "./org/cli.ts";
+import { runOrgMain } from "./org/daemon.ts";
+import { checkOrgs, crossCheck } from "./org/config.ts";
+import { listOrgs, saveOrg } from "./org/store.ts";
+import type { Org } from "./org/types.ts";
 import { VERSION } from "./version.ts";
 import { checkProviders, listProviders, loadProvider, maskProvider, removeProvider, saveProvider } from "./providers.ts";
 import type { Kind, Provider } from "./providers.ts";
 
 const USAGE = `usage:
   maihem definition add --name N --provider P --model M [--system S] [--tools a,b] [--no-sandbox] [--max-steps N]
-      [--reasoning LEVEL] [--context N] [--on-context-full compact|fail] [--compact-at X] [--sandbox-exclude a,b]
+      [--reasoning LEVEL] [--context N] [--on-context-full compact|fail] [--compact-at X] [--sandbox-exclude a,b] [--description TEXT]
   maihem definition update NAME [same flags except --name] [--unset FIELD]...
   maihem definition rm NAME
   maihem definition ls
   maihem definition inspect NAME
   maihem apply -f FILE
+  maihem org ls
+  maihem org inspect NAME
+  maihem org rm NAME
+  maihem org start NAME "GOAL"
+  maihem org stop NAME
+  maihem org resume NAME
+  maihem org log NAME [-f] [--ticket T-n]
+  maihem org board NAME
+  maihem org inbox NAME
+  maihem org approve NAME Q-n [-m TEXT]
+  maihem org reject NAME Q-n -m TEXT
+  maihem org answer NAME T-n TEXT
+  maihem org cancel NAME T-n REASON
+  maihem org assign NAME T-n MEMBER
+  maihem org ticket NAME T-n
+  maihem org tickets NAME [--milestone M] [--status S]
+  maihem org milestones NAME
   maihem run NAME [TASK] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N] [--allow-empty]
   maihem launch NAME [FIRST_MESSAGE] [-d] [--no-sandbox] [--workdir DIR] [--max-steps N]
   maihem ps
@@ -62,11 +85,6 @@ export function resolveRunArgs(argv: string[], cmd = "run"): RunArgs {
   return { def, task, detach: v.detach, allowEmpty: (v as { "allow-empty"?: boolean })["allow-empty"] };
 }
 
-const pad = (rows: string[][]): string[] => {
-  const w = rows[0].map((_, i) => Math.max(...rows.map((r) => r[i].length)));
-  return rows.map((r) => r.map((c, i) => c.padEnd(w[i])).join("  ").trimEnd());
-};
-
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const sendStop = (sock: string, apply: boolean): Promise<boolean> => new Promise((resolve) => {
@@ -101,53 +119,56 @@ const keyLabel = (p: Provider): string => p.api_key ? (/^\$(?!\$)/.test(p.api_ke
 
 const fileArg = (args: string[]): string | undefined => parseArgs({ args, options: { file: { type: "string", short: "f" } } }).values.file;
 
-// Validates everything first (definition providers come from `ps` or the registry), then saves providers, then definitions.
-function applyAll(file: string, ps: Provider[], ds: Definition[]): void {
+// Validates everything first (definition providers come from `ps` or the registry; org definitions from the file or the store), then saves in order: providers, definitions, orgs.
+function applyAll(file: string, ps: Provider[], ds: Definition[], os: Org[]): void {
   const given = new Set(ps.map((p) => p.name));
   for (const d of ds) if (!given.has(d.provider)) loadProvider(d.provider);
   const oldP = new Set(listProviders().map((p) => p.name));
   const oldD = new Set(listDefinitions().map((d) => d.name));
+  const oldO = new Set(listOrgs().map((o) => o.name));
+  const defs = new Set([...oldD, ...ds.map((d) => d.name)]);
+  for (const o of os) crossCheck(o, (n) => defs.has(n));
   const say = (old: Set<string>, kind: string, name: string) => console.log(`${old.has(name) ? "replaced" : "created"} ${kind} ${name}`);
   for (const p of ps) {
     if (p.api_key !== undefined && !/\$(\{[A-Za-z_]|[A-Za-z_])/.test(p.api_key.replaceAll("$$", ""))) console.error(`warning: api_key for "${p.name}" in ${file} is a plain key; use a reference like $OPENAI_API_KEY for files under version control`);
     saveProvider(p);
     say(oldP, "provider", p.name);
   }
-  for (const d of ds) {
-    saveDefinition(d);
-    say(oldD, "definition", d.name);
-  }
+  for (const d of ds) (saveDefinition(d), say(oldD, "definition", d.name));
+  for (const o of os) (saveOrg(o), say(oldO, "org", o.name));
 }
 
 function applyStack(file: string): void {
   const doc: unknown = YAML.parse(fs.readFileSync(file, "utf8"));
-  if (!isMap(doc)) throw new Error("apply file: expected a providers and/or definitions map");
-  const bad = Object.keys(doc).find((k) => k !== "providers" && k !== "definitions");
-  if (bad) throw new Error(`apply file: unknown section "${bad}" (use providers, definitions)`);
-  const ps = checkProviders(doc.providers ?? {}), ds = checkDefinitions(doc.definitions ?? {});
-  if (!ps.length && !ds.length) throw new Error("apply file: expected a providers and/or definitions map");
-  applyAll(file, ps, ds);
+  const none = "apply file: expected a providers, definitions and/or orgs map";
+  if (!isMap(doc)) throw new Error(none);
+  const bad = Object.keys(doc).find((k) => !["providers", "definitions", "orgs"].includes(k));
+  if (bad) throw new Error(`apply file: unknown section "${bad}" (use providers, definitions, orgs)`);
+  const ps = checkProviders(doc.providers ?? {}), ds = checkDefinitions(doc.definitions ?? {}), os = checkOrgs(doc.orgs ?? {});
+  if (!ps.length && !ds.length && !os.length) throw new Error(none);
+  applyAll(file, ps, ds, os);
 }
 
 const DEF_OPTIONS = {
   name: { type: "string" }, provider: { type: "string" }, model: { type: "string" }, system: { type: "string" }, tools: { type: "string" },
   "no-sandbox": { type: "boolean" }, "max-steps": { type: "string" }, reasoning: { type: "string" }, context: { type: "string" },
   "on-context-full": { type: "string" }, "compact-at": { type: "string" }, unset: { type: "string", multiple: true },
-  "sandbox-exclude": { type: "string" },
+  "sandbox-exclude": { type: "string" }, description: { type: "string" },
 } as const;
-const DEF_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude"];
+const DEF_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude", "description"];
 
 function definition(argv: string[]): boolean {
   const [sub, ...args] = argv;
   if (!["add", "update", "rm", "ls", "inspect"].includes(sub)) return false;
   const { values: v, positionals: [name] } = parseArgs({ args, options: DEF_OPTIONS, allowPositionals: true });
   const save = (raw: Record<string, unknown>): void => {
-    for (const k of ["provider", "model", "system", "reasoning"] as const) if (v[k] !== undefined) raw[k] = v[k];
+    for (const k of ["provider", "model", "system", "reasoning", "description"] as const) if (v[k] !== undefined) raw[k] = v[k];
     if (v["on-context-full"] !== undefined) raw.on_context_full = v["on-context-full"];
     if (v.tools !== undefined) raw.tools = splitTools(v.tools);
     if (v["sandbox-exclude"] !== undefined) raw.sandbox_exclude = splitTools(v["sandbox-exclude"]);
     if (v["no-sandbox"]) raw.sandbox = false;
-    for (const [f, k] of [["max-steps", "max_steps"], ["context", "context"], ["compact-at", "compact_at"]] as const) if (v[f] !== undefined) raw[k] = Number(v[f]);
+    if (v.context !== undefined) raw.context = v.context;
+    for (const [f, k] of [["max-steps", "max_steps"], ["compact-at", "compact_at"]] as const) if (v[f] !== undefined) raw[k] = Number(v[f]);
     for (const f of v.unset ?? []) {
       if (!DEF_UNSET.includes(f)) throw new Error(`definition: --unset takes ${DEF_UNSET.join(", ")}`);
       delete raw[f];
@@ -244,6 +265,9 @@ export async function main(argv: string[]): Promise<number> {
       case "definition":
         if (!definition(rest)) break;
         return 0;
+      case "org":
+        if (!(await orgCommand(rest))) break;
+        return 0;
       case "apply": {
         const file = fileArg(rest);
         if (!file) break;
@@ -298,6 +322,12 @@ export async function main(argv: string[]): Promise<number> {
         if (!rest[0]) break;
         await (await serveAgent(rest[0])).done;
         process.exit(0); // dedicated daemon: do not wait for stray library handles
+        return 0;
+      }
+      case "__org": {
+        if (!rest[0]) break;
+        await (rest[1] === "--resume" ? runOrgMain(rest[0], true) : runOrgMain(rest[0]));
+        process.exit(0);
         return 0;
       }
     }

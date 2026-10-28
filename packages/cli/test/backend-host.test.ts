@@ -21,6 +21,12 @@ describe("backend-host", () => {
     expect((await b.exec("pwd")).stdout.trim()).toBe(fs.realpathSync(root));
     expect((await b.exec("pwd", "sub")).stdout.trim()).toBe(fs.realpathSync(path.join(root, "sub")));
   });
+  it("an org session's exec runs with HOME in the org's scratch directory", async () => {
+    const home = path.join(root, "home");
+    expect((await createHostBackend(root, home).exec("echo $HOME")).stdout.trim()).toBe(home);
+    expect(fs.existsSync(home)).toBe(true);
+    expect((await createHostBackend(root).exec("echo $HOME")).stdout.trim()).toBe(process.env.HOME);
+  });
   it("exec reports stderr and exit code", async () => {
     const r = await createHostBackend(root).exec("echo err >&2; exit 3");
     expect(r.stderr.trim()).toBe("err");

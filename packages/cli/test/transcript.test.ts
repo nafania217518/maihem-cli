@@ -233,6 +233,16 @@ describe("agent signals", () => {
     expect(renderTranscript(b, S)).toEqual([]);
   });
   it("token counts drop a trailing .0", () => {
-    expect([64000, 12300, 9000, 999].map(k)).toEqual(["64k", "12.3k", "9k", "999"]);
+    expect([64000, 12300, 9000, 999].map((n) => k(n))).toEqual(["64k", "12.3k", "9k", "999"]);
+  });
+});
+
+describe("k", () => {
+  it("formats token counts with k, M, B and T", () => {
+    expect([0, 999, 1000, 12345, 2013877, 2_500_000_000, 3_000_000_000_000].map((n) => k(n))).toEqual(["0", "999", "1k", "12.3k", "2M", "2.5B", "3T"]);
+  });
+
+  it("k shows more decimals when asked", () => {
+    expect([2019768, 1844809, 174959, 2000000].map((n) => k(n, 2))).toEqual(["2.02M", "1.84M", "174.96k", "2M"]);
   });
 });

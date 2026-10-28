@@ -7,6 +7,7 @@ import { compact, estimate, isOverflow } from "./compact.ts";
 export interface Agent {
   run(task: string, onEvent: (e: AgentEvent) => void): Promise<string>;
   interrupt(): void;
+  inject(text: string): void; // queued; the next step (or the next run) sends it as a user message
   history: AgentEvent[];
 }
 
@@ -20,10 +21,11 @@ export interface AgentOptions {
   onContextFull?: "compact" | "fail";
   compactAt?: number;
   oneShot?: boolean;
+  stopTools?: string[]; // a step that calls one of these ends the turn normally
   requireOutput?: boolean; // an empty final step marks the turn "no output"
 }
 
-const WRAP_UP = "You reached the step limit. Do not call tools. Summarise what you did, what is left, and stop.";
+const WRAP_UP = "You reached the step limit. Call submit_review with what you have and name what is left, or call ask if you are blocked. In a review, call approve or request_changes; in a reply, call answer or forward.";
 const EXCEEDED = "model_context_window_exceeded";
 const RATE_KEYS = ["x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens", "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-input-tokens-remaining", "anthropic-ratelimit-output-tokens-remaining"];
 type Usage = { inputTokens?: number; outputTokens?: number };
@@ -36,9 +38,11 @@ export function createAgent(opts: AgentOptions): Agent {
   const history: AgentEvent[] = [];
   let used = 0;
   let ctrl: AbortController | undefined;
+  const queue: string[] = [];
   return {
     history,
     interrupt() { ctrl?.abort(); },
+    inject(text) { queue.push(text); },
     async run(task, onEvent) {
       const emit = (e: AgentEvent): void => { const s = { ...e, at: Date.now() } as AgentEvent; history.push(s); onEvent(s); };
       emit({ type: "user", text: task });
@@ -50,7 +54,7 @@ export function createAgent(opts: AgentOptions): Agent {
       let text = "", stepText = "";
       const usage = { inputTokens: 0, outputTokens: 0 };
       const gen = { tokens: 0, ms: 0 };
-      let count = 0, wrap = false, full = false;
+      let count = 0, wrap = false, full = false, stopped = false;
       let last: { finishReason: string; rawFinishReason?: string; response: { headers?: Record<string, string> } } | undefined;
       const pending: AgentEvent[] = [];
       ctrl = new AbortController();
@@ -63,20 +67,28 @@ export function createAgent(opts: AgentOptions): Agent {
       const flush = (): void => { pending.splice(0).forEach(emit); };
       const pass = async (): Promise<void> => {
         const result = streamText({
-          model: opts.model, instructions: opts.system, tools: opts.tools, messages: saved, abortSignal: signal, reasoning: opts.reasoning, streamRetries: 2,
+          model: opts.model, instructions: opts.system, tools: opts.tools, messages: saved, abortSignal: signal, reasoning: opts.reasoning, maxRetries: 0, streamRetries: 2, // start errors: model.ts retries with backoff
           onError: () => {}, // the default handler dumps the error to the console; the error part still reaches fullStream
-          stopWhen: ({ steps }) => (full = fail && !!budget && total(steps.at(-1)!.usage) >= budget) || steps.length >= opts.maxSteps + (opts.oneShot ? 1 : 0),
+          stopWhen: ({ steps }) => {
+            const step = steps.at(-1)!;
+            stopped = step.toolResults.some((r) => opts.stopTools?.includes(r.toolName) && !String(r.output).startsWith("error:"));
+            full = fail && !!budget && total(step.usage) >= budget;
+            return stopped || full || steps.length >= opts.maxSteps + (opts.oneShot ? 1 : 0);
+          },
           prepareStep: async ({ messages: ms, stepNumber }) => {
             saved = ms;
             let override: ModelMessage[] | undefined;
             if (!fail && budget && used >= (opts.compactAt ?? 0.8) * budget) override = await shrink(ms, budget, used);
             if (override) saved = override;
+            const injected = queue.splice(0);
+            for (const t of injected) { emit({ type: "user", text: t }); saved = [...saved, { role: "user", content: t }]; }
             if (opts.oneShot && stepNumber === opts.maxSteps) {
               wrap = true;
               saved = [...saved, { role: "user", content: WRAP_UP }];
-              return { messages: saved, toolChoice: "none" }; // ponytail: Ollama ignores toolChoice
+              // ponytail: Ollama ignores toolChoice
+              return opts.stopTools?.length ? { messages: saved, toolChoice: "required", activeTools: opts.stopTools } : { messages: saved, toolChoice: "none" };
             }
-            return override && { messages: override };
+            return (override || injected.length) ? { messages: saved } : undefined;
           },
           onStepEnd: (step) => { saved = [...saved, ...step.response.messages]; used = total(step.usage); },
         });
@@ -121,9 +133,10 @@ export function createAgent(opts: AgentOptions): Agent {
         if (signal.aborted) return interrupted();
         commit(); flush();
         const err = RetryError.isInstance(e) ? e.lastError : e;
+        const status = APICallError.isInstance(err) ? err.statusCode : undefined;
         emit({
-          type: "error", message: err instanceof Error ? err.message : String(err),
-          ...(APICallError.isInstance(err) && { status: err.statusCode }),
+          type: "error", message: err instanceof Error ? err.message || `${err.name}${status ? ` ${status}` : ""}` : String(err),
+          ...(APICallError.isInstance(err) && { status }),
           ...(RetryError.isInstance(e) && { attempts: e.errors.length }),
         });
         throw e;
@@ -134,10 +147,11 @@ export function createAgent(opts: AgentOptions): Agent {
       const steps = count - (wrap ? 1 : 0);
       const fr = last?.finishReason;
       const incomplete: Incomplete | undefined = full ? "context full"
-        : wrap || (fr === "tool-calls" && steps >= opts.maxSteps) ? "step limit"
+        : (wrap && !stopped) || (fr === "tool-calls" && !stopped && steps >= opts.maxSteps) ? "step limit"
         : last?.rawFinishReason === EXCEEDED ? "context full"
         : fr === "length" ? "output limit"
         : fr === "content-filter" ? "content filter"
+        : fr === "other" || fr === "unknown" ? "stream cut" // the provider stream ended without a finish reason
         : opts.requireOutput && !stepText.trim() ? "no output" : undefined;
       const headers = last?.response.headers ?? {};
       const rateLimits = Object.fromEntries(RATE_KEYS.filter((k) => headers[k] !== undefined).map((k) => [k, headers[k]]));
