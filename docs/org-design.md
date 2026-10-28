@@ -601,6 +601,10 @@ The definition's own `system` prompt comes first and adds style and domain.
   against the current limit, e.g. `running · ⏱ 1h 02m · tokens 2M / 3M (↑ 2M / ↓ 19.8k)`. The milestones list keeps the active milestone in view and marks a completed one with ✓. A
   busy member shows how long its session has run; a triage session shows "triaging". Todo and Needs Reply share
   one column, "Todo / Reply"; a Needs Reply ticket has the marker `?`. The board shows the queue.
+- The board is interactive: a focus moves over milestones, tickets, members and inbox items; Enter opens a ticket,
+  a milestone, an approval or question thread (`/approve [note]`, `/reject TEXT`, plain-text answers), or a
+  member's session read-only (live over its socket, else a replay of `agents/<id>.events.jsonl`). ANSI colors
+  carry the state: green live or approved, yellow waiting, red failed, rejected or stopped.
 - `org start` moves the previous run's tracker to `~/.maihem/orgs/NAME/history/`.
 - `org resume` continues a stopped org on its tracker: it logs `org.resumed`, keeps the raised token limit and wakes the open tickets. It refuses a done org or an org that never ran.
 
@@ -612,6 +616,8 @@ The definition's own `system` prompt comes first and adds style and domain.
 - `maihem org answer ORG T-n TEXT` answers a ticket in Needs Reply (empty text: try again).
 - `maihem org cancel ORG T-n REASON` and `maihem org assign ORG T-n MEMBER` act on any open ticket.
 - `maihem org approve ORG Q-n` and `maihem org reject ORG Q-n` decide an approval.
+- `maihem org board ORG` does the same from the inbox: an approval or a question opens as a thread with an input
+  line.
 - The org must run for answers to take effect.
 
 ## 16. Audit

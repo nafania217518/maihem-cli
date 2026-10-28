@@ -322,6 +322,7 @@ maihem org ls | inspect NAME | rm NAME
 ```
 
 - The org must run for `answer`, `approve` and `reject` to take effect.
+- `--status` takes `triage`, `needs_reply`, `todo`, `in_progress`, `in_review`, `done`, `canceled` or `duplicate`.
 
 ### Board
 
@@ -332,7 +333,8 @@ maihem org ls | inspect NAME | rm NAME
 - A milestone shows its completion, the acceptance summary and its tickets by status.
 - An approval opens a thread with an input line: `/approve [note]` or `/reject TEXT`. For a question to you, plain text answers it. Actions need a running org.
 - A member or a session opens its agent chat, read-only. A running session shows live. A finished one replays its saved events from `~/.maihem/agents/ID.events.jsonl`. `maihem rm` removes that file.
-- `--status` takes `triage`, `needs_reply`, `todo`, `in_progress`, `in_review`, `done`, `canceled` or `duplicate`.
+- Detail lines wrap to the window; PgUp/PgDn and Home/End scroll. The event log fills the space above the footer, newest at the bottom.
+- Colors carry the state, in your terminal's ANSI shades: green is live or approved (running, working members, ✓, merged, done); yellow waits for someone (paused, waiting for human, queued, `…` pending, `?` Needs Reply, `⊘` blocked, the inbox, tokens at 80 % of the limit); red went wrong (stopped, `✗` changes, failed, conflict, rejected, canceled, tokens over the limit). In the event log only the event kind is colored.
 
 ### Sessions, limits and pauses
 
@@ -417,7 +419,7 @@ Everything lives under `~/.maihem` (override with `MAIHEM_HOME`):
 
 - `providers/<name>.yaml`, `definitions/<name>.yaml`, `orgs/<name>.yaml`
 - `orgs/<name>/org.db` (tickets, milestones, comments, inbox, events), `orgs/<name>/org.log`, `orgs/<name>/worktrees/<member>`, `orgs/<name>/home` (the `HOME` of org sessions), `orgs/<name>/history/`
-- `agents/<id>.json` (state), `agents/<id>.log`, `agents/<id>.run.json` (while the agent runs)
+- `agents/<id>.json` (state), `agents/<id>.log`, `agents/<id>.events.jsonl` (every event, for the board's replay), `agents/<id>.run.json` (while the agent runs)
 - `worker.json`, `worker.log`
 
 Agent sockets live in the system temp directory (`maihem-<id>.sock`), because macOS limits socket paths to 104 bytes.
