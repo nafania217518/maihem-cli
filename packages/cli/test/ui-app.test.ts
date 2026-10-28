@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import os from "node:os";
 import React from "react";
 import { cleanup, render } from "ink-testing-library";
-import { App } from "../src/ui/App.ts";
+import { App, replaySource } from "../src/ui/App.ts";
 import stringWidth from "string-width";
 import chalk from "chalk";
 import type { AgentEvent } from "../src/protocol.ts";
@@ -17,7 +17,7 @@ let frame: () => string | undefined = () => "";
 const changed = (before: string | undefined) =>
   vi.waitFor(() => { if (frame() === before) throw new Error("same frame"); }, { timeout: 1000, interval: 5 }).catch(() => {});
 
-function setup(size = SIZE) {
+function setup(size = SIZE, view?: boolean) {
   let cb: (e: AgentEvent) => void = () => {};
   let subscribed = false;
   const unsub = vi.fn();
@@ -30,7 +30,7 @@ function setup(size = SIZE) {
     subscribed = true;
     return unsub;
   };
-  const r = render(React.createElement(App, { subscribe, send, detach, stop, interrupt, size }));
+  const r = render(React.createElement(App, { subscribe, send, detach, stop, interrupt, size, view }));
   frame = r.lastFrame;
   const emit = async (...es: AgentEvent[]) => {
     await tick();
@@ -490,5 +490,29 @@ describe("App", () => {
     await see(() => expect(last(lastFrame())).toContain("ctx 8.7k/64k · 14%"));
     await emit({ type: "context", used: 9000, budget: 64000 });
     await see(() => expect(last(lastFrame())).toContain("ctx 9k/64k"));
+  });
+  it("a replay feeds the saved events as history", async () => {
+    const { type: _t, history: _h, ...base } = hello as Extract<AgentEvent, { type: "hello" }>;
+    const subscribe = replaySource(base, [{ type: "user", text: "old question" }, { type: "text", delta: "old answer" }, { type: "done" }]);
+    const r = render(React.createElement(App, { subscribe, send: vi.fn(), detach: vi.fn(), stop: vi.fn(), interrupt: vi.fn(), size: SIZE, view: true }));
+    await see(() => expect(r.lastFrame()).toContain("old question"));
+    expect(r.lastFrame()).toContain("old answer");
+  });
+  it("in view mode Esc and Ctrl+C leave without the stop prompt", async () => {
+    for (const k of ["\u001b", "\u0003"]) {
+      const { stdin, emit, detach, stop, lastFrame } = setup(SIZE, true);
+      await emit({ ...hello, readonly: true } as AgentEvent);
+      await key(stdin, k);
+      await see(() => expect(detach).toHaveBeenCalledTimes(1));
+      expect(lastFrame()).not.toContain("Stop agent");
+      expect(stop).not.toHaveBeenCalled();
+      cleanup();
+    }
+  });
+  it("in view mode there is no input line", async () => {
+    const { lastFrame, emit } = setup(SIZE, true);
+    await emit(hello);
+    await see(() => expect(lastFrame()).toContain("read-only · Esc to go back"));
+    expect(lastFrame()).not.toContain("❯");
   });
 });

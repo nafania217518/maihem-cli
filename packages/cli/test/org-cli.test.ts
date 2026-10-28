@@ -13,6 +13,10 @@ import { boardData, EVENT_KINDS, formatEvent } from "../src/org/cli.ts";
 import type { OrgEvent } from "../src/org/types.ts";
 import { validateOrg } from "../src/org/config.ts";
 import { saveDefinition } from "../src/registry.ts";
+import net from "node:net";
+import { render } from "ink";
+import { eventsPath, saveState, sockPath } from "../src/state.ts";
+import { encode } from "../src/protocol.ts";
 
 const unmount = vi.fn();
 vi.mock("ink", async (orig) => ({
@@ -281,6 +285,59 @@ describe("org cli: board", () => {
     expect(unmount).toHaveBeenCalledTimes(1);
   });
 
+  it("org board passes the actions and the session source to the board", async () => {
+    const t = seed();
+    t.createMilestone("Core", "", "org");
+    t.createTicket({ title: "Work", status: "todo", milestone: "M0" }, "org"); // T-1
+    t.createTicket({ title: "Accept", status: "triage", milestone: "M0", kind: "acceptance" }, "org"); // T-2
+    t.setSummary("T-2", "all checks pass", "ba");
+    t.addComment("T-1", "looks fine", "ba");
+    t.setSummary("T-1", "did it", "dev1");
+    t.log("session.started", "dev1", { member: "dev1", id: "live1" }, "T-1");
+    t.log("session.started", "dev1", { member: "dev1", id: "old1" }, "T-1");
+    t.ask("ship?", "org"); // Q-1
+    t.createTicket({ title: "Ask", status: "needs_reply", assignee: "human" }, "org"); // T-3
+    t.close();
+    // a replayed session: exited, with saved events; a live one: running, with a socket
+    const st = (id: string, status: "running" | "exited") => saveState({ id, name: "dev1", pid: process.pid, status, workdir: "/w", sandbox: false, started: "", log: "", sock: sockPath(id) });
+    st("old1", "exited"); st("live1", "running");
+    fs.writeFileSync(eventsPath("old1"), encode({ type: "user", text: "old task" } as never));
+    const hello = { type: "hello", name: "dev1", model: "m", provider: "p", sandbox: false, id: "live1", readonly: false, workdir: "/w", history: [] };
+    const srv = net.createServer((c) => c.write(encode(hello as never)));
+    fs.rmSync(sockPath("live1"), { force: true });
+    await new Promise<void>((r) => srv.listen(sockPath("live1"), r));
+    let checked: Promise<void> = Promise.resolve();
+    vi.mocked(render).mockImplementationOnce(((el: { props: Record<string, (...a: unknown[]) => unknown> }) => {
+      const p = el.props;
+      checked = (async () => { try {
+        expect((p.ticket("T-1") as string[]).join("\n")).toContain("T-1 Work\nstatus");
+        expect(p.thread("T-1")).toEqual(["summary: did it", "comments", "  ba: looks fine"]);
+        expect(p.sessions("T-1")).toEqual([expect.objectContaining({ id: "live1", member: "dev1" }), expect.objectContaining({ id: "old1", member: "dev1" })]);
+        expect(p.lastSession("dev1")).toBe("old1");
+        expect(p.lastSession("pm")).toBeUndefined();
+        const ms = p.milestone("M0") as { lines: string[]; tickets: { id: string; status: string }[] };
+        expect(ms.lines.join("\n")).toContain("M0 Core");
+        expect(ms.lines.join("\n")).toContain("acceptance T-2: all checks pass");
+        expect(ms.tickets.map((x) => x.status)).toEqual(["triage", "todo"]);
+        const old = p.source("old1") as { subscribe: (cb: (e: unknown) => void) => void; close: () => void }, got: unknown[] = [];
+        old.subscribe((e) => got.push(e));
+        expect(got[0]).toMatchObject({ type: "hello", id: "old1", readonly: true, history: [{ type: "user", text: "old task" }] });
+        const live = p.source("live1") as typeof old, rec: unknown[] = [];
+        live.subscribe((e) => rec.push(e));
+        await vi.waitFor(() => expect(rec[0]).toMatchObject({ type: "hello", id: "live1" }));
+        live.close();
+        expect(p.act({ kind: "answer", id: "T-3", text: "yes" })).toContain("T-3");
+        expect(p.act({ kind: "approve", id: "Q-1", text: "ok" })).toBe("answered Q-1");
+        stopped();
+        expect(() => p.act({ kind: "reject", id: "Q-1", text: "no" })).toThrow("org acme is not running");
+      } finally { p.onExit(); } })();
+      return { unmount };
+    }) as never);
+    expect(await main(["org", "board", "acme"])).toBe(0);
+    await checked;
+    srv.close();
+  });
+
   it("board data collects usage, milestones, tickets, members, sessions, queue, inbox and recent events", () => {
     const t = seed();
     t.setMeta("goal", "g1"); t.setMeta("state", { status: "running" });
@@ -311,7 +368,7 @@ describe("org cli: board", () => {
     expect(d.human).toEqual([{ id: "T-4", title: "Four", question: "dev1 asks human: which db?" }]);
     expect(d.waiting).toBe(true);
     expect(d.recent.find((l) => l.includes("ticket.created T-1"))).toContain('"One"');
-    expect(d.recent.length).toBeLessThanOrEqual(20);
+    expect(d.recent.length).toBeLessThanOrEqual(200);
   });
 
   it("board data has the running time without pauses", () => {

@@ -6,6 +6,8 @@ import stringWidth from "string-width";
 import type { AgentEvent, Incomplete } from "../protocol.ts";
 
 export const theme = { accent: "#E5484D", border: "#888888", userBg: "#373737", success: "#4EBA65", error: "#FF6B80", warning: "#FFC107" };
+// state colors of the org board: named ANSI colors, so the terminal theme picks the shade
+export const state = { live: "greenBright", wait: "yellow", fail: "red" } as const;
 
 type Usage = { inputTokens?: number; outputTokens?: number };
 export type Block =
@@ -51,7 +53,7 @@ export function toBlocks(events: AgentEvent[], readonly = false): Block[] {
 
 const md = new Marked(markedTerminal({ tab: 2, showSectionPrefix: false }));
 const len = (s: string) => stringWidth(s);
-const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(1, w), { hard: true, trim: false }).split("\n");
+export const wrap = (s: string, w: number) => wrapAnsi(s, Math.max(1, w), { hard: true, trim: false }).split("\n");
 const red = (s: string) => chalk.hex(theme.error)(s);
 const NOTICE: Record<Incomplete, string> = {
   "step limit": "Step limit reached",

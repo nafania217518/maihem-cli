@@ -23,9 +23,15 @@ export interface AppProps {
   stop: (apply: boolean) => void;
   interrupt: () => void;
   size?: { columns: number; rows: number };
+  view?: boolean; // read-only viewer: no input, Esc / Ctrl+C leave at once
 }
 
 type Hello = Extract<AgentEvent, { type: "hello" }>;
+// A subscribe for App that replays the saved events of an ended session.
+export const replaySource = (hello: Omit<Hello, "type" | "history">, events: AgentEvent[]): AppProps["subscribe"] => (cb) => {
+  cb({ ...hello, type: "hello", readonly: true, history: events });
+  return () => {};
+};
 // Shorten s to w columns by cutting the middle.
 export const middle = (s: string, w: number): string => {
   if (stringWidth(s) <= w) return s;
@@ -130,6 +136,8 @@ export function App(props: AppProps): React.ReactElement {
       else if (key.return || ch === "y") halt(true);
     } else if (ask) {
       return;
+    } else if (props.view && leave) {
+      props.detach();
     } else if (key.ctrl && ch === "o") {
       setDetailed((d) => !d);
       setInput(input); // TextInput also received the "o"
@@ -180,7 +188,9 @@ export function App(props: AppProps): React.ReactElement {
         ? h(Text, { wrap: "truncate-end" }, `Apply changes to ${middle(hello?.workdir ?? "", columns - 26)}? [Y/n]`)
         : ask === "stopping"
           ? h(Text, null, "stopping…")
-          : hello?.readonly
+          : props.view
+            ? dim("read-only · Esc to go back")
+            : hello?.readonly
             ? dim("read-only · Esc to leave")
             : h(
                 Box,
@@ -199,7 +209,7 @@ export function App(props: AppProps): React.ReactElement {
 
   const hint = off > 0
       ? `↓ ${fresh || off} more lines · end to jump`
-      : busy && !hello?.readonly
+      : busy && !hello?.readonly && !props.view
         ? "esc to interrupt · ctrl+d to detach"
         : "? for shortcuts";
   const pct = ctx?.budget ? Math.round((ctx.used / ctx.budget) * 100) : undefined;

@@ -220,7 +220,7 @@ The full design is in [docs/org-design.md](docs/org-design.md).
 maihem apply -f examples/org.yaml                 # providers, definitions and the demo org
 mkdir -p ~/maihem-demo && git -C ~/maihem-demo init
 maihem org start demo "a CLI that converts CSV to JSON"
-maihem org board demo                             # live board
+maihem org board demo                             # interactive live board
 ```
 
 ### The grid
@@ -307,7 +307,7 @@ A ticket has a status, a label (`bug` or `other`), a priority, an assignee, revi
 maihem org start demo "GOAL"                       # start the org daemon
 maihem org stop demo
 maihem org resume demo                             # continue a stopped org on its tracker, with the first goal
-maihem org board demo                              # timers, tokens vs limit, milestones, tickets, members, inbox, events
+maihem org board demo                              # interactive: timers, tokens, milestones, tickets, members, inbox
 maihem org log demo -f                             # event feed
 maihem org log demo --ticket T-3                   # one ticket's history
 maihem org inbox demo                              # approvals and the tickets waiting for you
@@ -322,6 +322,16 @@ maihem org ls | inspect NAME | rm NAME
 ```
 
 - The org must run for `answer`, `approve` and `reject` to take effect.
+
+### Board
+
+`maihem org board NAME` is interactive.
+
+- Arrow keys move the focus over milestones, ticket cards, members and inbox items. Enter opens a full-screen detail. Esc goes back. `q` quits.
+- A ticket shows its fields, description, approvals, comments, history and sessions. Enter on a session opens it.
+- A milestone shows its completion, the acceptance summary and its tickets by status.
+- An approval opens a thread with an input line: `/approve [note]` or `/reject TEXT`. For a question to you, plain text answers it. Actions need a running org.
+- A member or a session opens its agent chat, read-only. A running session shows live. A finished one replays its saved events from `~/.maihem/agents/ID.events.jsonl`. `maihem rm` removes that file.
 - `--status` takes `triage`, `needs_reply`, `todo`, `in_progress`, `in_review`, `done`, `canceled` or `duplicate`.
 
 ### Sessions, limits and pauses

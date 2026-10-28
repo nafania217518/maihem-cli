@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { newId, saveState, loadState, listStates, isAlive, refresh, logPath, sockPath, removeState } from "../src/state.ts";
+import { newId, saveState, loadState, listStates, isAlive, refresh, logPath, sockPath, removeState, eventsPath, readEvents } from "../src/state.ts";
 import type { AgentState } from "../src/state.ts";
 
 const mk = (id: string, started: string, pid = process.pid): AgentState => ({
@@ -65,5 +65,20 @@ describe("state", () => {
     expect(fs.readdirSync(dir)).toEqual(["keep.json"]);
     expect(fs.existsSync(a.sock)).toBe(false);
     removeState(a);
+  });
+  it("readEvents returns the saved events and skips bad lines", () => {
+    fs.mkdirSync(path.join(home, "agents"), { recursive: true });
+    fs.writeFileSync(eventsPath("ev1"), '{"type":"user","text":"hi"}\nnot json\n\n{"type":"done"}\n');
+    expect(readEvents("ev1")).toEqual([{ type: "user", text: "hi" }, { type: "done" }]);
+  });
+  it("readEvents of an agent without an events file is empty", () => {
+    expect(readEvents("none")).toEqual([]);
+  });
+  it("removeState removes the events file", () => {
+    const a = mk("rm2", "2026-01-01T00:00:00.000Z");
+    saveState(a);
+    fs.writeFileSync(eventsPath("rm2"), "{}\n");
+    removeState(a);
+    expect(fs.existsSync(eventsPath("rm2"))).toBe(false);
   });
 });

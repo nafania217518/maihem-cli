@@ -14,7 +14,7 @@ import { createOrgTools, stopTools } from "./org/tools.ts";
 import { openTracker } from "./org/tracker.ts";
 import { buildAgent, openBackend, printEvent, reportCopyOut, runFile } from "./run.ts";
 import type { OrgRef } from "./run.ts";
-import { loadState, saveState } from "./state.ts";
+import { eventsPath, loadState, saveState } from "./state.ts";
 import { copyOut } from "./sync.ts";
 
 export interface DaemonHandle { shutdown(apply?: boolean): Promise<void>; done: Promise<void>; sock: string }
@@ -42,7 +42,7 @@ export async function serveAgent(id: string, opts: { model?: LanguageModel } = {
       milestoneDiff: (tags, p) => milestoneDiff(expandRepo(o.repo), org.main, tags, p),
       ...(org.kind === "work" && { merge }) }) : {};
   const agent = buildAgent(def, provider, backend, opts.model, readonly, readonly && !allowEmpty, orgTools, org && stopTools(org.kind));
-  if (org && tracker) tracker.log("session.started", org.member, { member: org.member, id }, org.ticket);
+  if (org && tracker) tracker.log("session.started", org.member, { member: org.member, id, kind: org.kind }, org.ticket);
   const clients = new Set<net.Socket>();
   let busy = false;
   let exitCode = 0;
@@ -63,6 +63,7 @@ export async function serveAgent(id: string, opts: { model?: LanguageModel } = {
       else if (!output && !tools && !e.incomplete && !e.interrupted) { exitCode = 1; tracker.log("session.failed", org.member, { member: org.member, id, error: "empty answer: no output and no tool call" }, org.ticket); }
       else tracker.log("session.ended", org.member, { member: org.member, id, tokens: input + output, input, output, text: text.slice(0, 500) }, org.ticket);
     }
+    fs.appendFileSync(eventsPath(id), encode(e));
     for (const c of clients) c.write(encode(e));
   };
   const handle = async (text: string, reply?: net.Socket): Promise<void> => {

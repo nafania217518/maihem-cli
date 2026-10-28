@@ -1,5 +1,6 @@
 // `maihem org ...`: ls, inspect, rm, start, stop, resume, log, board, inbox, approve, reject, answer, cancel, assign, ticket, tickets, milestones.
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -7,16 +8,20 @@ import React from "react";
 import { render } from "ink";
 import YAML from "yaml";
 import { answerHint, Board, hint } from "../ui/Board.ts";
-import type { BoardData } from "../ui/Board.ts";
+import type { Action, BoardData, Source } from "../ui/Board.ts";
+import { replaySource } from "../ui/App.ts";
+import { lineSplitter } from "../protocol.ts";
+import type { AgentEvent } from "../protocol.ts";
+import { loadState, readEvents, refresh, sockPath } from "../state.ts";
 import { k } from "../ui/transcript.ts";
 import { pad } from "../pad.ts";
-import { deps } from "../run.ts";
+import { deps, runFile } from "../run.ts";
 import { prepareRepo } from "./git.ts";
 import { dbFile, loadRunnable, orgDir, orgPid, pidFile } from "./daemon.ts";
 import { createOps } from "./ops.ts";
 import { listOrgs, loadOrg, removeOrg } from "./store.ts";
 import { openTracker } from "./tracker.ts";
-import type { Tracker } from "./tracker.ts";
+import type { Tracker, TicketView } from "./tracker.ts";
 import { STATUSES } from "./types.ts";
 import type { OrgEvent, Role, Status } from "./types.ts";
 
@@ -130,12 +135,15 @@ export function boardData(name: string, t: Tracker, now = Date.now()): BoardData
     inbox: t.inbox("open"),
     human: waitsForHuman(t),
     waiting: t.getMeta<boolean>("waiting") ?? false,
-    recent: t.events().slice(-20).map((e) => formatEvent(e, title(t, e))),
+    recent: t.events().slice(-200).map((e) => formatEvent(e, title(t, e))),
   };
 }
 
+// a ticket's comments, a comment's later lines indented
+const comments = (tk: TicketView) => (tk.comments.length ? ["comments", tk.comments.map((c) => `  ${c.author}: ${c.text.replaceAll("\n", "\n    ")}`).join("\n")] : []);
+
 // the full ticket: fields, description, comments, then its history
-function printTicket(t: Tracker, id: string): void {
+export function ticketLines(t: Tracker, id: string): string[] {
   const tk = t.getTicket(id), rel = tk.relations;
   const ids = (xs: string[]) => xs.join(", ") || "-";
   // the other end of each relation of a kind, on the given side (relations hold only links of this ticket)
@@ -149,12 +157,52 @@ function printTicket(t: Tracker, id: string): void {
     ["original", ends("duplicate", "to")], ["duplicates", ends("duplicate", "from")],
     ["branch", tk.branch ?? "-"], ["merged", tk.merged ? short(tk.merged) : "-"],
   ];
-  console.log(`${tk.id} ${tk.title}`);
-  for (const l of pad(fields)) console.log(l);
-  console.log(`\n${tk.description || "(no description)"}`);
-  if (tk.comments.length) console.log(`\ncomments\n${tk.comments.map((c) => `  ${c.author}: ${c.text.replaceAll("\n", "\n    ")}`).join("\n")}`);
-  console.log(`\nhistory\n${t.events().filter((e) => e.ticket === id).map((e) => formatEvent(e, title(t, e))).join("\n")}`);
+  const c = comments(tk);
+  return [`${tk.id} ${tk.title}`, ...pad(fields), "", tk.description || "(no description)", ...(c.length ? ["", ...c] : []),
+    "", "history", t.events().filter((e) => e.ticket === id).map((e) => formatEvent(e, title(t, e))).join("\n")].join("\n").split("\n");
 }
+
+// an approval or a question thread: the ticket summary and comments
+const thread = (t: Tracker, id: string): string[] => {
+  const tk = t.getTicket(id), ls = [...(tk.summary ? [`summary: ${tk.summary}`] : []), ...comments(tk)];
+  return ls.length ? ls.join("\n").split("\n") : [];
+};
+
+// a milestone: completion, its acceptance summary, its tickets by status
+function milestoneDetail(t: Tracker, name: string, id: string) {
+  const m = t.listMilestones().find((x) => x.id === id), ops = createOps(t, loadOrg(name));
+  const ts = t.listTickets({ milestone: id }).sort((a, b) => STATUSES.indexOf(a.status) - STATUSES.indexOf(b.status));
+  const acc = ts.find((x) => x.kind === "acceptance");
+  return {
+    lines: [`${id} ${m?.name ?? ""} ${Math.round(ops.completion(id))}%`, "", acc ? `acceptance ${acc.id}: ${acc.summary ?? "(no summary yet)"}` : "no acceptance ticket"],
+    tickets: ts.map((x) => ({ id: x.id, title: x.title, status: x.status })),
+  };
+}
+
+const started = (t: Tracker) => t.events().filter((e) => e.kind === "session.started");
+
+// a session for the board: the live socket while it runs, else a replay of its saved events
+export function sessionSource(id: string): Source {
+  const s = refresh(loadState(id));
+  if (s.status === "running" && fs.existsSync(sockPath(id))) {
+    const sock = net.connect(sockPath(id));
+    sock.on("error", () => {});
+    return {
+      subscribe: (cb) => {
+        const feed = lineSplitter((o) => cb(o as AgentEvent));
+        sock.on("data", feed);
+        return () => sock.off("data", feed);
+      },
+      close: () => sock.end(),
+    };
+  }
+  const def = fs.existsSync(runFile(id)) ? JSON.parse(fs.readFileSync(runFile(id), "utf8")).def : {};
+  return { subscribe: replaySource({ name: s.name, model: def.model ?? "-", provider: def.provider ?? "-", sandbox: s.sandbox, id, workdir: s.workdir, readonly: true }, readEvents(id)), close: () => {} };
+}
+
+const mustRun = (name: string) => {
+  if (!orgPid(name)) throw new Error(`org ${name} is not running; start it: maihem org start ${name} "GOAL"`);
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -176,7 +224,7 @@ export async function orgCommand(argv: string[]): Promise<boolean> {
   // the human acts; the org must run to act on it
   const human = async (fn: (t: Tracker) => string) => {
     await using((t) => {
-      if (!orgPid(name)) throw new Error(`org ${name} is not running; start it: maihem org start ${name} "GOAL"`);
+      mustRun(name);
       console.log(fn(t));
     });
     return true;
@@ -230,7 +278,19 @@ export async function orgCommand(argv: string[]): Promise<boolean> {
     });
   } else if (sub === "board" && name) {
     await using((t) => new Promise<void>((resolve) => {
-      const board = React.createElement(Board, { read: () => boardData(name, t), onExit: () => { app.unmount(); resolve(); } });
+      const act = (a: Action) => {
+        mustRun(name);
+        if (a.kind === "answer") return createOps(t, loadOrg(name)).answer(a.id, a.text, "user");
+        t.answer(a.id, a.text, "user", a.kind === "approve");
+        return `answered ${a.id}`;
+      };
+      const board = React.createElement(Board, {
+        read: () => boardData(name, t), onExit: () => { app.unmount(); resolve(); }, act,
+        ticket: (id) => ticketLines(t, id), thread: (id) => thread(t, id), milestone: (id) => milestoneDetail(t, name, id),
+        sessions: (tk) => started(t).filter((e) => e.ticket === tk).map((e) => ({ id: String(e.data.id), member: e.actor, kind: String(e.data.kind ?? "session"), started: e.at })),
+        lastSession: (m) => started(t).findLast((e) => e.actor === m)?.data.id as string | undefined,
+        source: sessionSource,
+      });
       const app = render(board, { alternateScreen: true, exitOnCtrlC: false, patchConsole: false });
     }));
   } else if (sub === "inbox" && name) {
@@ -247,7 +307,7 @@ export async function orgCommand(argv: string[]): Promise<boolean> {
   else if (sub === "answer" && name && pos[0] && pos[1] !== undefined) return ops((o) => o.answer(pos[0], pos[1], "user"));
   else if (sub === "cancel" && name && pos[0] && pos[1]) return ops((o) => o.cancel(pos[0], pos[1], "user"));
   else if (sub === "assign" && name && pos[0] && pos[1]) return ops((o) => o.assign(pos[0], pos[1], "user"));
-  else if (sub === "ticket" && name && pos[0]) await using((t) => printTicket(t, pos[0]));
+  else if (sub === "ticket" && name && pos[0]) await using((t) => console.log(ticketLines(t, pos[0]).join("\n")));
   else if (sub === "tickets" && name) {
     await using((t) => {
       if (v.status && !(STATUSES as readonly string[]).includes(v.status)) throw new Error(`unknown status ${v.status}; use one of ${STATUSES.join(", ")}`);

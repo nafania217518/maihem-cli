@@ -30,3 +30,4 @@
 - Claude Fable 5.1 / Opus 5.5 reject forced tool use and budget thinking; @ai-sdk/anthropic 4.0.79 turns toolChoice "required" into "auto" and reasoning into adaptive thinking + effort : packages/cli/src/agent.ts
 - Org exec runs with HOME = ~/.maihem/orgs/NAME/home, so products under test never write the user's real home : packages/cli/src/backend-host.ts
 - Retries: 5 per request with exponential backoff (base 10 s, doubling) and jitter in model.ts; the AI SDK's own maxRetries is 0 (its streamRetries only re-runs mid-stream errors) : packages/cli/src/model.ts
+- Each agent event is appended to ~/.maihem/agents/ID.events.jsonl for the board's replay; one line per text delta : packages/cli/src/daemon.ts

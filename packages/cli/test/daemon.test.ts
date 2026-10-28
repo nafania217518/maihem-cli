@@ -13,7 +13,7 @@ import type { AgentEvent } from "../src/protocol.ts";
 import { openTracker } from "../src/org/tracker.ts";
 import { saveOrg } from "../src/org/store.ts";
 import { runFile } from "../src/run.ts";
-import { loadState, logPath, saveState } from "../src/state.ts";
+import { eventsPath, loadState, logPath, readEvents, saveState } from "../src/state.ts";
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
 const stream = (chunks: LanguageModelV4StreamPart[]) => ({ stream: simulateReadableStream({ chunks }) });
@@ -88,6 +88,28 @@ describe("daemon", () => {
     expect(ev[0]).toMatchObject({ actor: "ba", ticket: "T-1", data: { member: "ba", id } });
     expect(ev[1]).toMatchObject({ actor: "ba", ticket: "T-1", data: { member: "ba", id, tokens: 4, input: 3, output: 1 } });
     t.close();
+  });
+  it("session.started carries the session kind", async () => {
+    setup({ task: "go" });
+    const db = path.join(work, "org.db");
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, org: { name: "acme", member: "ba", db, kind: "reply", ticket: "T-1", main: "main" } }));
+    saveOrg(acme(work));
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    const t = openTracker(db);
+    // wait for the end: the session logs it after the start, and a closed tracker would reject that write
+    for (let i = 0; i < 100 && !t.events().some((e) => e.kind === "session.ended" || e.kind === "session.failed"); i++) await sleep(20);
+    expect(t.events().find((e) => e.kind === "session.started")).toMatchObject({ data: { member: "ba", id, kind: "reply" } });
+    t.close();
+  });
+  it("the daemon appends every event to the session's events file", async () => {
+    setup({ task: "go" });
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    for (let i = 0; i < 100 && !readEvents(id).some((e) => e.type === "done"); i++) await sleep(20);
+    const ev = readEvents(id);
+    expect(ev[0]).toMatchObject({ type: "user", text: "go" });
+    expect(ev.some((e) => e.type === "text" && e.delta === "answer")).toBe(true);
+    expect(fs.readFileSync(eventsPath(id), "utf8").trim().split("\n").length).toBe(ev.length);
   });
   it("session.ended carries the last text", async () => {
     setup({ task: "go" });

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { AgentEvent } from "./protocol.ts";
 import { home } from "./registry.ts";
 
 export interface AgentState {
@@ -21,6 +22,13 @@ export interface AgentState {
 const dir = (): string => path.join(home(), "agents");
 const file = (id: string): string => path.join(dir(), `${id}.json`);
 export const logPath = (id: string): string => path.join(dir(), `${id}.log`);
+export const eventsPath = (id: string): string => path.join(dir(), `${id}.events.jsonl`);
+
+// The saved events of a session, one JSON object per line; bad lines are skipped.
+export function readEvents(id: string): AgentEvent[] {
+  if (!fs.existsSync(eventsPath(id))) return [];
+  return fs.readFileSync(eventsPath(id), "utf8").split("\n").flatMap((l) => { try { return l ? [JSON.parse(l)] : []; } catch { return []; } });
+}
 // Unix socket paths are capped at 104 bytes on macOS, so sockets live in the OS temp dir, not MAIHEM_HOME.
 export const sockPath = (id: string): string => path.join(os.tmpdir(), `maihem-${id}.sock`);
 
