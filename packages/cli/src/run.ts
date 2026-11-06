@@ -18,7 +18,7 @@ import type { AgentEvent } from "./protocol.ts";
 type DoneEvent = Extract<AgentEvent, { type: "done" }>;
 import { home } from "./registry.ts";
 import { attach } from "./attach.ts";
-import { isAlive, logPath, newId, saveState, sockPath } from "./state.ts";
+import { isAlive, logPath, newId, removeState, saveState, sockPath } from "./state.ts";
 import type { AgentState } from "./state.ts";
 import { copyIn, copyOut } from "./sync.ts";
 import type { Snapshot } from "./sync.ts";
@@ -89,8 +89,16 @@ export function spawnAgent(def: Definition, task: string | undefined, provider: 
   fs.writeFileSync(runFile(id), JSON.stringify({ def, task, provider, mode, allowEmpty, org }), { mode: 0o600 });
   const binPath = fileURLToPath(new URL("../bin/maihem.js", import.meta.url));
   const logFd = fs.openSync(state.log, "a");
-  const child = deps.spawn(process.execPath, [binPath, "__agent", id], { detached: true, stdio: ["ignore", logFd, logFd], env: process.env });
-  fs.closeSync(logFd);
+  let child: ReturnType<typeof deps.spawn>;
+  try {
+    child = deps.spawn(process.execPath, [binPath, "__agent", id], { detached: true, stdio: ["ignore", logFd, logFd], env: process.env });
+  } catch (e) {
+    // a pid 0 state reads running forever, so prune would never remove it
+    removeState(state);
+    throw e;
+  } finally {
+    fs.closeSync(logFd);
+  }
   child.unref();
   const running = { ...state, pid: child.pid! };
   saveState(running);

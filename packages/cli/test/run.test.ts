@@ -274,6 +274,15 @@ describe("run", () => {
     const s = spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run");
     expect(fs.readFileSync(path.join(home, "agents", `${s.id}.skills`, "pdf", "SKILL.md"), "utf8")).toContain("Reads PDFs");
   });
+  // req: 1-add-skills/TR-19
+  it("a spawn that throws leaves no state and no frozen skills folder", () => {
+    addPdf();
+    vi.spyOn(deps, "spawn").mockImplementation(() => { throw new Error("spawn failed"); });
+    const def = { ...parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m", skills: ["pdf"] })), workdir: work, sandbox: false };
+    expect(() => spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run")).toThrow("spawn failed");
+    expect(listStates()).toEqual([]);
+    expect(fs.readdirSync(path.join(home, "agents")).filter((n) => n.endsWith(".skills"))).toEqual([]);
+  });
   // req: 1-add-skills/TR-10
   it("catalog after the system prompt", async () => {
     addPdf(); skilled("Be brief.");
