@@ -359,6 +359,48 @@ describe("main", () => {
         expect(fs.readdirSync(reg())).toEqual(["pdf"]);
       });
     });
+    // req: 1-add-skills/TR-5
+    describe("definition skills", () => {
+      beforeEach(async () => {
+        saveProvider({ name: "op", kind: "openai" });
+        await main(["skill", "add", src("pdf")]);
+        await main(["skill", "add", src("zip")]);
+        log.mockClear();
+      });
+      const add = (...a: string[]) => main(["definition", "add", "--name", "a", "--provider", "op", "--model", "m", ...a]);
+      it("--skills and --unset skills work on add and update", async () => {
+        expect(await add("--skills", "pdf, zip")).toBe(0);
+        expect(loadDefinition("a").skills).toEqual(["pdf", "zip"]);
+        expect(await main(["definition", "update", "a", "--skills", "zip"])).toBe(0);
+        expect(loadDefinition("a").skills).toEqual(["zip"]);
+        expect(await main(["definition", "update", "a", "--unset", "skills"])).toBe(0);
+        expect("skills" in loadDefinition("a")).toBe(false);
+      });
+      it("add fails for an unregistered skill with the add hint", async () => {
+        expect(await add("--skills", "pdf,nope")).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: nope; add it: maihem skill add PATH");
+        expect(() => loadDefinition("a")).toThrow();
+      });
+      it("update fails for an unregistered skill", async () => {
+        await add();
+        expect(await main(["definition", "update", "a", "--skills", "nope"])).toBe(1);
+        expect("skills" in loadDefinition("a")).toBe(false);
+      });
+      it("inspect shows skills", async () => {
+        await add("--skills", "pdf");
+        log.mockClear();
+        expect(await main(["definition", "inspect", "a"])).toBe(0);
+        expect(out()).toContain("skills:\n  - pdf\n");
+      });
+      it("apply rejects an unregistered skill and saves nothing", async () => {
+        const f = path.join(home, "s.yaml");
+        fs.writeFileSync(f, "providers:\n  p2: {kind: openai}\ndefinitions:\n  d1: {provider: p2, model: m, skills: [pdf]}\n  d2: {provider: p2, model: m, skills: [nope]}\n");
+        expect(await main(["apply", "-f", f])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: nope; add it: maihem skill add PATH");
+        expect(() => loadProvider("p2")).toThrow();
+        expect(() => loadDefinition("d1")).toThrow();
+      });
+    });
   });
 
   describe("provider", () => {

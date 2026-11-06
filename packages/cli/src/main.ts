@@ -27,7 +27,7 @@ import { addSkill, listSkills, loadSkill, skillFiles, updateSkill } from "./skil
 
 const USAGE = `usage:
   maihem definition add --name N --provider P --model M [--system S] [--tools a,b] [--no-sandbox] [--max-steps N]
-      [--reasoning LEVEL] [--context N] [--on-context-full compact|fail] [--compact-at X] [--sandbox-exclude a,b] [--description TEXT]
+      [--reasoning LEVEL] [--context N] [--on-context-full compact|fail] [--compact-at X] [--sandbox-exclude a,b] [--description TEXT] [--skills a,b]
   maihem definition update NAME [same flags except --name] [--unset FIELD]...
   maihem definition rm NAME
   maihem definition ls
@@ -129,6 +129,7 @@ const fileArg = (args: string[]): string | undefined => parseArgs({ args, option
 function applyAll(file: string, ps: Provider[], ds: Definition[], os: Org[]): void {
   const given = new Set(ps.map((p) => p.name));
   for (const d of ds) if (!given.has(d.provider)) loadProvider(d.provider);
+  for (const d of ds) for (const s of d.skills ?? []) loadSkill(s);
   const oldP = new Set(listProviders().map((p) => p.name));
   const oldD = new Set(listDefinitions().map((d) => d.name));
   const oldO = new Set(listOrgs().map((o) => o.name));
@@ -159,9 +160,9 @@ const DEF_OPTIONS = {
   name: { type: "string" }, provider: { type: "string" }, model: { type: "string" }, system: { type: "string" }, tools: { type: "string" },
   "no-sandbox": { type: "boolean" }, "max-steps": { type: "string" }, reasoning: { type: "string" }, context: { type: "string" },
   "on-context-full": { type: "string" }, "compact-at": { type: "string" }, unset: { type: "string", multiple: true },
-  "sandbox-exclude": { type: "string" }, description: { type: "string" },
+  "sandbox-exclude": { type: "string" }, description: { type: "string" }, skills: { type: "string" },
 } as const;
-const DEF_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude", "description"];
+const DEF_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude", "description", "skills"];
 
 function definition(argv: string[]): boolean {
   const [sub, ...args] = argv;
@@ -172,6 +173,7 @@ function definition(argv: string[]): boolean {
     if (v["on-context-full"] !== undefined) raw.on_context_full = v["on-context-full"];
     if (v.tools !== undefined) raw.tools = splitTools(v.tools);
     if (v["sandbox-exclude"] !== undefined) raw.sandbox_exclude = splitTools(v["sandbox-exclude"]);
+    if (v.skills !== undefined) raw.skills = splitTools(v.skills);
     if (v["no-sandbox"]) raw.sandbox = false;
     if (v.context !== undefined) raw.context = v.context;
     for (const [f, k] of [["max-steps", "max_steps"], ["compact-at", "compact_at"]] as const) if (v[f] !== undefined) raw[k] = Number(v[f]);
@@ -181,6 +183,7 @@ function definition(argv: string[]): boolean {
     }
     const d = validate(raw);
     loadProvider(d.provider);
+    for (const s of d.skills ?? []) loadSkill(s);
     saveDefinition(d);
   };
   if (sub === "add") {

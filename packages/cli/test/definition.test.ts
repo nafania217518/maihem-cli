@@ -14,6 +14,24 @@ describe("definition", () => {
     expect("sandbox_exclude" in parseDefinition(JSON.stringify(base))).toBe(false);
     for (const bad of ["a", [1], [""]]) expect(() => parseDefinition(JSON.stringify({ ...base, sandbox_exclude: bad }))).toThrow("definition: sandbox_exclude must be a list of paths");
   });
+  // req: 1-add-skills/TR-5
+  describe("skills", () => {
+    it("a skills list is kept", () => {
+      expect(parseDefinition(JSON.stringify({ ...base, skills: ["pdf", "zip-2"] })).skills).toEqual(["pdf", "zip-2"]);
+    });
+    it("a non-list is rejected", () => {
+      for (const bad of ["pdf", [1], {}]) expect(() => parseDefinition(JSON.stringify({ ...base, skills: bad }))).toThrow("definition: skills must be a list of skill names");
+    });
+    it("a duplicate is rejected", () => {
+      expect(() => parseDefinition(JSON.stringify({ ...base, skills: ["pdf", "pdf"] }))).toThrow('definition: duplicate skill "pdf"');
+    });
+    it("a bad name is rejected", () => {
+      expect(() => parseDefinition(JSON.stringify({ ...base, skills: ["Pdf"] }))).toThrow("definition: skills must be a list of skill names");
+    });
+    it("no skills means no field", () => {
+      expect("skills" in parseDefinition(JSON.stringify(base))).toBe(false);
+    });
+  });
   it("loads json", () => {
     expect(parseDefinition(JSON.stringify({ ...base, tools: ["read"] })).tools).toEqual(["read"]);
   });
