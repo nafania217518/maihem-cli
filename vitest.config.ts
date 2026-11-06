@@ -6,7 +6,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["packages/cli/src/**/*.ts", "packages/worker/src/routes.ts"],
-      thresholds: { lines: 90, functions: 90, statements: 90 },
+      thresholds: { lines: 90, functions: 90, statements: 90, perFile: true },
     },
   },
 });
