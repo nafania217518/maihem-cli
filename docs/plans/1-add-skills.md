@@ -210,6 +210,9 @@ The BR list is in the task item. Each test that proves a TR carries `// req: 1-a
 - TR-23 (BR-10): MUST make `spawnAgent` save no placeholder pid before the child exists. It MUST also remove the state when any step before the spawn throws (run file write, log open), as TR-19 does for the spawn itself, so no state reads "running" forever. (Amendment approved during the task.)
   - tests: `run.test.ts`: a run-file write failure leaves no state; a log-open failure leaves no state; a state saved before the spawn has no pid
 
+- TR-24 (BR-10): MUST make `refresh` leave a running state that has no pid unchanged (`s.status === "running" && s.pid !== undefined && !isAlive(s.pid)`), so a concurrent `ps` or `prune` does not mark a starting agent exited or delete its files. (Defect found in the review of TR-23.)
+  - tests: `state.test.ts`: refresh keeps a running state without a pid running
+
 ## Test scope
 
 No existing case breaks, reworks or is removed. Three close calls:
