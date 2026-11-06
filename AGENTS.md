@@ -79,6 +79,8 @@ Project-only rules. The armory skills hold the rest.
 Format: `Term : one-line meaning`, plus `. Avoid: <synonyms>` when a synonym was rejected.
 A line MUST hold only a term of the project's domain, with no implementation detail.
 
+- Skill : a folder of instructions, scripts and reference files that an agent loads on demand
+
 ## Caveats
 
 Format: the caveat line of the armory `core` skill, section Reports
@@ -104,3 +106,11 @@ Format: the caveat line of the armory `core` skill, section Reports
 - The git remote is named upstream, not origin; armory `<base>` falls back to the local master : —
 - The sub-issue and blocked-by tracker bindings were not tried on a live item; the repo had no issues at setup : AGENTS.md
 - Coverage thresholds apply per file (perFile), so each module must reach 90% on its own : vitest.config.ts
+- Skills are frozen per agent at start into ~/.maihem/agents/<id>.skills/; skill update and rm never touch a running agent : packages/cli/src/skills.ts
+- The skill tool reads files on the host, also in sandbox mode; skill scripts run only in host mode : packages/cli/src/skills.ts
+- Skill folders are copied with verbatimSymlinks, because Node's default rewrites relative symlinks to absolute paths into the source folder : packages/cli/src/skills.ts
+- The skill catalog is appended in buildAgent, so org sessions get it although the org replaces def.system : packages/cli/src/run.ts
+- Compaction re-inserts the latest result of each skill call after the summary, so a large skill can keep the context above compact_at : packages/cli/src/compact.ts
+- definition update fails while a listed skill is missing (as for a missing provider), even when the update does not touch skills : packages/cli/src/main.ts
+- An empty front matter block parses to null under yaml 2.9.1; skills.ts reads it as no fields : packages/cli/src/skills.ts
+- skill rm -f during an org run stops the org daemon at the next session spawn; org/daemon.ts spawn has no catch : packages/cli/src/org/daemon.ts
