@@ -316,7 +316,7 @@ describe("run", () => {
     const [s] = listStates();
     expect(await lastOpts().tools.skill.execute({ name: "pdf" }, {})).toContain(`Skill folder: ${path.join(home, "agents", `${s.id}.skills`, "pdf")}. `);
   });
-  const launch =(...a: string[]) => launchCommand(resolveRunArgs(args(...a).slice(1)));
+  const launch = (...a: string[]) => launchCommand(resolveRunArgs(args(...a).slice(1)));
   it("launch -d prints the id without attaching", async () => {
     vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
     const attach = vi.spyOn(deps, "attach").mockResolvedValue();
