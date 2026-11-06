@@ -72,10 +72,8 @@ export const transient = (d: OrgEvent["data"]): boolean => {
 };
 // the detail of a session whose process never started; it logs no session event
 const spawnError = (id: string): string | undefined => {
-  try {
-    const st = loadState(id);
-    return st.status === "exited" && st.detail?.startsWith("spawn failed:") ? st.detail : undefined;
-  } catch { return undefined; } // no state file: the session left nothing to read
+  const st = loadState(id);
+  return st.status === "exited" && st.detail?.startsWith("spawn failed:") ? st.detail : undefined;
 };
 // slot order (status-workflow.md §5)
 const SLOT: Partial<Record<Status, number>> = { needs_reply: 0, in_review: 1, in_progress: 2, todo: 3, triage: 4 };
