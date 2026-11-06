@@ -100,14 +100,15 @@ const sendStop = (sock: string, apply: boolean): Promise<boolean> => new Promise
 
 async function stop(id: string, discard: boolean): Promise<void> {
   const s = loadState(id);
-  if (!(await sendStop(s.sock, !discard))) {
+  // a process that failed to start has no pid; pid 0 would signal the whole process group
+  if (s.pid && !(await sendStop(s.sock, !discard))) {
     try {
       process.kill(s.pid, "SIGTERM");
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
     }
   }
-  for (let i = 0; i < 50 && isAlive(s.pid); i++) await sleep(100);
+  for (let i = 0; s.pid && i < 50 && isAlive(s.pid); i++) await sleep(100);
   s.status = "exited";
   saveState(s);
   fs.rmSync(runFile(id), { force: true });

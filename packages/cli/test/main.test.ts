@@ -533,6 +533,14 @@ describe("main", () => {
     expect(fs.existsSync(runFile("d1"))).toBe(false);
     expect(fs.existsSync(sockPath("d1"))).toBe(false);
   });
+  // req: 1-add-skills/TR-22
+  it("stop of a state without a pid exits 0 and leaves it exited", async () => {
+    const kill = vi.spyOn(process, "kill");
+    saveState({ id: "n1", name: "a", status: "exited", exitCode: 1, detail: "spawn failed: spawn ENOENT", workdir: "/w", sandbox: true, started: "2026-01-01T00:00:00.000Z", log: logPath("n1"), sock: sockPath("n1") } as never);
+    expect(await main(["stop", "n1"])).toBe(0);
+    expect(loadState("n1").status).toBe("exited");
+    expect(kill).not.toHaveBeenCalled();
+  });
   it("stop --discard sends a stop message without apply", async () => {
     const sock = path.join(os.tmpdir(), `mh-stop-${process.pid}.sock`);
     fs.rmSync(sock, { force: true });
