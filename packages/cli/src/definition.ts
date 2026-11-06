@@ -5,6 +5,7 @@ export const TOOLS = ["read", "write", "edit", "list", "exec"] as const;
 export type Tool = (typeof TOOLS)[number];
 export const REASONING = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type Reasoning = (typeof REASONING)[number];
+export const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export interface Definition {
   name: string;
   provider: string;
