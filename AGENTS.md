@@ -114,3 +114,6 @@ Format: the caveat line of the armory `core` skill, section Reports
 - definition update fails while a listed skill is missing (as for a missing provider), even when the update does not touch skills : packages/cli/src/main.ts
 - An empty front matter block parses to null under yaml 2.9.1; skills.ts reads it as no fields : packages/cli/src/skills.ts
 - skill rm -f during an org run stops the org daemon at the next session spawn; org/daemon.ts spawn has no catch : packages/cli/src/org/daemon.ts
+- loadSkill checks the name against SKILL_NAME before it touches the disk, so skill inspect ../x reports "no such skill" instead of reading outside the registry : packages/cli/src/skills.ts
+- skill update swaps through the hidden sibling folders .NAME.new and .NAME.old, and skill ls skips dot-folders : packages/cli/src/skills.ts
+- A fresh worktree needs the ignored, generated packages/worker/worker-configuration.d.ts before the lint gate passes : packages/worker/tsconfig.json
