@@ -294,6 +294,40 @@ describe("run", () => {
     child.emit("error", new Error("spawn node ENOENT"));
     expect(listStates()).toMatchObject([{ status: "exited", exitCode: 1, detail: "spawn failed: spawn node ENOENT" }]);
   });
+  // req: 1-add-skills/TR-23
+  it("a run-file write failure leaves no state", () => {
+    const write = fs.writeFileSync;
+    vi.spyOn(fs, "writeFileSync").mockImplementation((file, ...rest) => {
+      if (String(file).endsWith(".run.json")) throw new Error("disk full");
+      return write(file, ...(rest as [never]));
+    });
+    const def = { ...parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m" })), workdir: work, sandbox: false };
+    expect(() => spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run")).toThrow("disk full");
+    expect(listStates()).toEqual([]);
+  });
+  // req: 1-add-skills/TR-23
+  it("a log-open failure leaves no state", () => {
+    const open = fs.openSync;
+    vi.spyOn(fs, "openSync").mockImplementation((file, ...rest) => {
+      if (String(file).endsWith(".log")) throw new Error("EMFILE");
+      return open(file, ...(rest as [never]));
+    });
+    const def = { ...parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m" })), workdir: work, sandbox: false };
+    expect(() => spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run")).toThrow("EMFILE");
+    expect(listStates()).toEqual([]);
+  });
+  // req: 1-add-skills/TR-23
+  it("a state saved before the spawn has no pid", () => {
+    let before: unknown[] = [];
+    vi.spyOn(deps, "spawn").mockImplementation(() => {
+      before = listStates();
+      return Object.assign(new EventEmitter(), { pid: 4242, unref: vi.fn() }) as never;
+    });
+    const def = { ...parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m" })), workdir: work, sandbox: false };
+    spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run");
+    expect(before).toHaveLength(1);
+    expect(before[0]).not.toHaveProperty("pid");
+  });
   // req: 1-add-skills/TR-10
   it("catalog after the system prompt", async () => {
     addPdf(); skilled("Be brief.");

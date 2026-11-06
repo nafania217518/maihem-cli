@@ -77,27 +77,28 @@ export function incompleteText(e: DoneEvent): string {
   return e.incomplete === "step limit" ? `step limit reached (${e.steps})` : e.incomplete === "output limit" ? "output limit reached" : e.incomplete === "no output" ? "agent finished without output" : e.incomplete!;
 }
 
-function newState(id: string, def: Definition, pid: number): AgentState {
+function newState(id: string, def: Definition, pid?: number): AgentState {
   return { id, name: def.name, pid, status: "running", workdir: def.workdir!, sandbox: def.sandbox, started: new Date().toISOString(), log: logPath(id), sock: sockPath(id) };
 }
 
 export function spawnAgent(def: Definition, task: string | undefined, provider: Resolved, mode: "run" | "chat", allowEmpty = false, org?: OrgRef, name?: string): AgentState {
   const id = newId();
-  const state = { ...newState(id, def, 0), name: name ?? def.name };
+  const state = { ...newState(id, def), name: name ?? def.name };
   freezeSkills(def.skills ?? [], id);
   saveState(state);
-  fs.writeFileSync(runFile(id), JSON.stringify({ def, task, provider, mode, allowEmpty, org }), { mode: 0o600 });
   const binPath = fileURLToPath(new URL("../bin/maihem.js", import.meta.url));
-  const logFd = fs.openSync(state.log, "a");
+  let logFd: number | undefined;
   let child: ReturnType<typeof deps.spawn>;
   try {
+    fs.writeFileSync(runFile(id), JSON.stringify({ def, task, provider, mode, allowEmpty, org }), { mode: 0o600 });
+    logFd = fs.openSync(state.log, "a");
     child = deps.spawn(process.execPath, [binPath, "__agent", id], { detached: true, stdio: ["ignore", logFd, logFd], env: process.env });
   } catch (e) {
-    // a pid 0 state reads running forever, so prune would never remove it
+    // a state without a child would read running forever, so prune would never remove it
     removeState(state);
     throw e;
   } finally {
-    fs.closeSync(logFd);
+    if (logFd !== undefined) fs.closeSync(logFd);
   }
   child.unref();
   const running = { ...state, pid: child.pid };
