@@ -86,3 +86,8 @@ export function updateSkill(name: string, src: string): void {
   fs.renameSync(fresh, target);
   fs.rmSync(old, { recursive: true, force: true });
 }
+
+export function removeSkill(name: string): void {
+  loadSkill(name);
+  fs.rmSync(skillDir(name), { recursive: true });
+}

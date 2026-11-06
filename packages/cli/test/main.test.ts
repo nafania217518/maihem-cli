@@ -359,6 +359,32 @@ describe("main", () => {
         expect(fs.readdirSync(reg())).toEqual(["pdf"]);
       });
     });
+    // req: 1-add-skills/TR-6
+    describe("rm", () => {
+      it("refused while used, and -f forces", async () => {
+        saveProvider({ name: "op", kind: "openai" });
+        await main(["skill", "add", src("pdf")]);
+        for (const n of ["b", "a"]) await main(["definition", "add", "--name", n, "--provider", "op", "--model", "m", "--skills", "pdf"]);
+        expect(await main(["skill", "rm", "pdf"])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe('error: skill "pdf" is used by definitions: a, b; use -f to remove it anyway');
+        expect(fs.existsSync(reg("pdf"))).toBe(true);
+        log.mockClear();
+        expect(await main(["skill", "rm", "-f", "pdf"])).toBe(0);
+        expect(out()).toBe("removed pdf");
+        expect(fs.existsSync(reg("pdf"))).toBe(false);
+      });
+      it("an unused skill is removed", async () => {
+        await main(["skill", "add", src("pdf")]);
+        log.mockClear();
+        expect(await main(["skill", "rm", "pdf"])).toBe(0);
+        expect(out()).toBe("removed pdf");
+        expect(fs.existsSync(reg("pdf"))).toBe(false);
+      });
+      it("an unknown name fails", async () => {
+        expect(await main(["skill", "rm", "nope"])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: nope; add it: maihem skill add PATH");
+      });
+    });
     // req: 1-add-skills/TR-5
     describe("definition skills", () => {
       beforeEach(async () => {
