@@ -119,3 +119,6 @@ Format: the caveat line of the armory `core` skill, section Reports
 - A fresh worktree needs the ignored, generated packages/worker/worker-configuration.d.ts before the lint gate passes : packages/worker/tsconfig.json
 - One registered SKILL.md that fails to parse makes skill ls fail, along with skill rm and skill update for that skill; only a manual delete clears it : packages/cli/src/skills.ts
 - The TR-15 tests make a copy fail with a chmod 000 file, so they fail when the tests run as root : packages/cli/test/skills.test.ts
+- The skill tool accepts file: "" and answers that the skill folder is a directory : packages/cli/src/skills.ts
+- The skill catalog joins its <skill> entries with no newline between them : packages/cli/src/skills.ts
+- A missing skill at run start reaches the user as exit code 1 and an error line on stderr; main catches the throw : packages/cli/src/main.ts
