@@ -130,4 +130,5 @@ Format: the caveat line of the armory `core` skill, section Reports
 - When the update rollback rename also fails, the skill stays only at the hidden .NAME.old, and ls and update no longer see it : packages/cli/src/skills.ts
 - spawnAgent saves the running state with pid undefined when the spawn fails later through the error event : packages/cli/src/run.ts
 - Node defers spawn errors to process.nextTick with child.pid undefined; spawnAgent relies on this to save the running state first : packages/cli/src/run.ts
-- The org daemon reaps a session whose process failed to start as a no-op, not as a transient failure : packages/cli/src/org/daemon.ts
+- A spawn failure in an org backs off like a transient session.failed and also counts toward the park cap; the park message names the spawn error : packages/cli/src/org/daemon.ts
+- AgentState types pid as number, but a failed spawn saves no pid; stop treats a falsy pid (also 0) as not running : packages/cli/src/main.ts
