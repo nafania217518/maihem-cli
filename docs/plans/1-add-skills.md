@@ -191,6 +191,9 @@ The BR list is in the task item. Each test that proves a TR carries `// req: 1-a
     - a whitespace-only description falls back, or is refused when the body is empty
     - a block (`|`) description loses its trailing newline
 
+- TR-17 (BR-9): MUST make `compact` tolerate a `skill` tool call whose `input` is `null` (the AI SDK keeps it on an invalid call): read `name`/`file` from `p.input ?? {}`, so compaction still returns the summary. (Defect found in the final review of TR-13.)
+  - tests: `compact.test.ts`: a skill call with `input: null` and a result does not break compaction
+
 ## Test scope
 
 No existing case breaks, reworks or is removed. Three close calls:

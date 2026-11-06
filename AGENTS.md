@@ -124,3 +124,4 @@ Format: the caveat line of the armory `core` skill, section Reports
 - A missing skill at run start reaches the user as exit code 1 and an error line on stderr; main catches the throw : packages/cli/src/main.ts
 - A state saved with pid 0 always reads "running", because process.kill(0, 0) succeeds on the process group : packages/cli/src/state.ts
 - The vitest text coverage report leaves out files at 100%; a module missing from it is fully covered : vitest.config.ts
+- The AI SDK keeps input: null on an invalid tool call, because its non-object fallback treats null as an object : packages/cli/src/compact.ts
