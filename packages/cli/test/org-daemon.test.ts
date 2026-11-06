@@ -619,7 +619,7 @@ describe("org runner", () => {
 describe("org runner deps", () => {
   it("defaultDeps spawn passes the org ref with the session kind; alive and stop use the agent state", () => {
     saveProvider({ name: "p", kind: "ollama" } as never);
-    const spawn = vi.spyOn(run.deps, "spawn").mockReturnValue({ pid: 4242, unref() {} } as never);
+    const spawn = vi.spyOn(run.deps, "spawn").mockReturnValue({ pid: 4242, unref() {}, on() {} } as never);
     const id = defaultDeps.spawn({ org: org(), member: "pm", def: def("dpm"), task: "t", db: "/db", ticket: "", kind: "triage", batch: ["T-2"], main: "main" });
     expect(JSON.parse(fs.readFileSync(run.runFile(id), "utf8"))).toMatchObject({ org: { name: "acme", member: "pm", db: "/db", ticket: "", main: "main", kind: "triage", batch: ["T-2"] }, def: { sandbox: false } });
     expect(spawn).toHaveBeenCalled();
@@ -666,7 +666,7 @@ describe("org daemon helpers", () => {
 
   it("runOrgMain runs the org from start.json, stops on SIGTERM and removes org.pid", async () => {
     saveProvider({ name: "p", kind: "ollama" } as never);
-    vi.spyOn(run.deps, "spawn").mockReturnValue({ pid: 4242, unref() {} } as never);
+    vi.spyOn(run.deps, "spawn").mockReturnValue({ pid: 4242, unref() {}, on() {} } as never);
     fs.mkdirSync(orgDir("acme"), { recursive: true });
     fs.writeFileSync(path.join(orgDir("acme"), "start.json"), JSON.stringify({ goal: "g" }));
     fs.writeFileSync(pidFile("acme"), "1");

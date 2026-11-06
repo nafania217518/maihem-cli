@@ -554,7 +554,7 @@ describe("main", () => {
     expect(child.signalCode).toBe("SIGTERM");
   });
   it("launch is dispatched with the run source forms", async () => {
-    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn(), on: vi.fn() } as never);
     saveProvider({ name: "openai", kind: "openai", api_key: "k" });
     saveDefinition(def("a"));
     expect(await main(["launch", "a", "-d", "--no-sandbox", "hi"])).toBe(0);

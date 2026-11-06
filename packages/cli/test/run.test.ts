@@ -8,6 +8,7 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { main } from "../src/main.ts";
 import { listStates } from "../src/state.ts";
 import { Readable } from "node:stream";
+import { EventEmitter } from "node:events";
 import { deps, launchCommand, spawnAgent, printEvent, reportCopyOut, runFile } from "../src/run.ts";
 import { resolveRunArgs } from "../src/main.ts";
 import { saveProvider } from "../src/providers.ts";
@@ -211,13 +212,13 @@ describe("run", () => {
   });
   it("run without a task reads it from piped stdin", async () => {
     deps.stdin = Readable.from(["piped task\n"]);
-    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn(), on: vi.fn() } as never);
     expect(await main(args("-d", "--no-sandbox"))).toBe(0);
     expect(spawn).toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(runFile(listStates()[0].id), "utf8")).task).toBe("piped task");
   });
   it("run -d spawns a one-shot agent in run mode", async () => {
-    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn(), on: vi.fn() } as never);
     expect(await main(args("-d", "--no-sandbox", "x"))).toBe(0);
     const [s] = listStates();
     expect(out).toBe(`${s.id}\n`);
@@ -231,7 +232,7 @@ describe("run", () => {
     expect(w.ensureWorker).not.toHaveBeenCalled();
   });
   it("spawnAgent writes the org reference and the display name", () => {
-    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 7, unref: vi.fn() } as never);
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 7, unref: vi.fn(), on: vi.fn() } as never);
     const org = { name: "acme", member: "ba", db: "/x/org.db", ticket: "T-1", main: "main", kind: "work" as const };
     const def = { ...parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m" })), workdir: work, sandbox: false };
     const s = spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run", true, org, "acme/ba");
@@ -259,7 +260,7 @@ describe("run", () => {
   // req: 1-add-skills/TR-7
   it("run -d and launch with a missing skill spawn nothing", async () => {
     skilled();
-    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn(), on: vi.fn() } as never);
     expect(await main(args("-d", "--no-sandbox", "x"))).toBe(1);
     expect(err).toContain("no such skill: pdf");
     await expect(launch("-d", "--no-sandbox")).rejects.toThrow("no such skill: pdf");
@@ -269,7 +270,7 @@ describe("run", () => {
   // req: 1-add-skills/TR-7
   it("spawnAgent freezes the named skills", () => {
     addPdf();
-    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 7, unref: vi.fn() } as never);
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 7, unref: vi.fn(), on: vi.fn() } as never);
     const def = { ...parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m", skills: ["pdf"] })), workdir: work, sandbox: false };
     const s = spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run");
     expect(fs.readFileSync(path.join(home, "agents", `${s.id}.skills`, "pdf", "SKILL.md"), "utf8")).toContain("Reads PDFs");
@@ -282,6 +283,15 @@ describe("run", () => {
     expect(() => spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run")).toThrow("spawn failed");
     expect(listStates()).toEqual([]);
     expect(fs.readdirSync(path.join(home, "agents")).filter((n) => n.endsWith(".skills"))).toEqual([]);
+  });
+  // req: 1-add-skills/TR-20
+  it("an async spawn error marks the state exited with the detail and does not throw", () => {
+    const child = Object.assign(new EventEmitter(), { pid: undefined, unref: vi.fn() });
+    vi.spyOn(deps, "spawn").mockReturnValue(child as never);
+    const def = { ...parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m" })), workdir: work, sandbox: false };
+    spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run");
+    child.emit("error", new Error("spawn node ENOENT"));
+    expect(listStates()).toMatchObject([{ status: "exited", exitCode: 1, detail: "spawn failed: spawn node ENOENT" }]);
   });
   // req: 1-add-skills/TR-10
   it("catalog after the system prompt", async () => {
@@ -327,7 +337,7 @@ describe("run", () => {
   });
   const launch = (...a: string[]) => launchCommand(resolveRunArgs(args(...a).slice(1)));
   it("launch -d prints the id without attaching", async () => {
-    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn(), on: vi.fn() } as never);
     const attach = vi.spyOn(deps, "attach").mockResolvedValue();
     expect(await launch("-d", "--no-sandbox")).toBe(0);
     const [s] = listStates();
@@ -336,12 +346,12 @@ describe("run", () => {
     expect(JSON.parse(fs.readFileSync(runFile(s.id), "utf8")).mode).toBe("chat");
   });
   it("launch passes the first message to the agent", async () => {
-    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn(), on: vi.fn() } as never);
     expect(await launch("-d", "--no-sandbox", "hello there")).toBe(0);
     expect(JSON.parse(fs.readFileSync(runFile(listStates()[0].id), "utf8"))).toMatchObject({ task: "hello there", mode: "chat" });
   });
   it("launch attaches once the socket exists", async () => {
-    vi.spyOn(deps, "spawn").mockReturnValue({ pid: process.pid, unref: vi.fn() } as never);
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: process.pid, unref: vi.fn(), on: vi.fn() } as never);
     const attach = vi.spyOn(deps, "attach").mockResolvedValue();
     deps.pollMs = 5;
     setTimeout(() => fs.writeFileSync(listStates()[0].sock, ""), 30);
@@ -351,7 +361,7 @@ describe("run", () => {
     fs.rmSync(s.sock, { force: true });
   });
   it("launch fails with the logs hint when the agent dies before its socket opens", async () => {
-    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 999999, unref: vi.fn() } as never);
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 999999, unref: vi.fn(), on: vi.fn() } as never);
     const attach = vi.spyOn(deps, "attach").mockResolvedValue();
     expect((await launch("--no-sandbox").catch((e) => e)).message).toBe(`agent exited, see maihem logs ${listStates()[0].id}`);
     expect(attach).not.toHaveBeenCalled();
@@ -365,7 +375,7 @@ describe("run", () => {
   });
   it("run with an unknown provider fails before spawning", async () => {
     definition("nope", "nope");
-    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn(), on: vi.fn() } as never);
     expect(await main(["run", "nope", "--no-sandbox", "-d", "x"])).toBe(1);
     expect(err).toMatch(/provider "nope" not found/);
     expect(spawn).not.toHaveBeenCalled();
@@ -375,7 +385,7 @@ describe("run", () => {
     expect(listStates()).toEqual([]);
   });
   it("run.json holds the resolved provider", async () => {
-    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn(), on: vi.fn() } as never);
     expect(await main(args("-d", "--no-sandbox", "x"))).toBe(0);
     const run = JSON.parse(fs.readFileSync(runFile(listStates()[0].id), "utf8"));
     expect(run.provider).toEqual({ name: "t", kind: "openai", api_key: "k" });
