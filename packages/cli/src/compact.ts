@@ -51,7 +51,7 @@ function keptSkills(ms: ModelMessage[]): ModelMessage[] {
     if (m.role !== "assistant" || typeof m.content === "string") continue;
     for (const p of m.content) {
       if (p.type !== "tool-call" || p.toolName !== SKILL_TOOL || !results.has(p.toolCallId)) continue;
-      const { name, file } = p.input as { name?: string; file?: string };
+      const { name, file } = (p.input ?? {}) as { name?: string; file?: string };
       const key = JSON.stringify([name, file]);
       calls.delete(key);
       calls.set(key, p);

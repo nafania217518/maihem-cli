@@ -98,6 +98,17 @@ describe("compact", () => {
       expect(await compact(sumModel(), ms, 10)).toEqual([summary, u("last")]);
     });
 
+    // req: 1-add-skills/TR-17
+    it("tolerates a skill call with null input", async () => {
+      const ms = [...step(call("1", null as unknown as object), result("1", "S")), ...pad, u("last")];
+      expect(await compact(sumModel(), ms, 10)).toEqual([
+        summary,
+        { role: "assistant", content: [call("1", null as unknown as object)] },
+        { role: "tool", content: [result("1", "S")] },
+        u("last"),
+      ]);
+    });
+
     it("skill results survive a second compaction", async () => {
       const ms = [...step(call("1", { name: "s" }), result("1", "S")), ...pad, u("last")];
       const once = (await compact(sumModel(), ms, 10))!;
