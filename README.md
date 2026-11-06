@@ -107,7 +107,7 @@ maihem definition inspect reviewer
 maihem definition rm reviewer
 ```
 
-- `add` and `update` take one option per field (see the reference below): `--system`, `--tools a,b`, `--no-sandbox`, `--max-steps`, `--reasoning`, `--context`, `--on-context-full`, `--compact-at`, `--sandbox-exclude a,b`.
+- `add` and `update` take one option per field (see the reference below): `--system`, `--tools a,b`, `--no-sandbox`, `--max-steps`, `--reasoning`, `--context`, `--on-context-full`, `--compact-at`, `--sandbox-exclude a,b`, `--skills a,b`.
 - The provider must exist. Else `add` and `update` fail with the `maihem provider add` command to fix it.
 
 ### Tools
@@ -121,6 +121,52 @@ maihem definition rm reviewer
 | `exec` | Run a shell command. In the sandbox, the shell is `just-bash` (see Sandbox mode). |
 
 A definition without `tools` gets all five. Paths are relative to the working directory (`/workspace` in the sandbox).
+
+## Skills
+
+A skill is a folder of instructions, scripts and reference files. Register it once; a definition names it; the agent loads it on demand.
+
+```bash
+maihem skill add ./pdf-tools          # copy the folder to ~/.maihem/skills/pdf-tools/
+maihem skill update pdf-tools ./pdf-tools   # replace the copy; the folder must hold the same skill name
+maihem skill ls                       # NAME and DESCRIPTION, sorted
+maihem skill inspect pdf-tools        # name, description and every file
+maihem skill rm pdf-tools             # refuses while a definition lists it; -f forces
+maihem definition update reviewer --skills pdf-tools,style-guide
+maihem definition update reviewer --unset skills
+```
+
+### Folder format
+
+- The folder holds a `SKILL.md`. Other files and subfolders are optional.
+- `SKILL.md` may start with a front matter block between two `---` lines, in YAML. Fields: `name` and `description`. Other fields are ignored.
+- Rules are lenient:
+  - Without front matter, or with an empty block, the folder name is the name and the first non-empty body line is the description. A leading `#` is removed.
+  - A `name` or `description` with no value counts as absent.
+  - A BOM and CRLF line ends are accepted.
+- The name uses lowercase letters, digits and single hyphens, at most 64 characters. A skill without a description is refused.
+- Quote a description that contains a colon: `description: "Use when: ..."`. Invalid YAML is refused with a hint.
+- `add` fails when the name exists; use `update`. A failed copy leaves nothing registered.
+
+### Use in a definition
+
+- The field `skills:` is a list of distinct registered skill names. `--skills a,b` sets it on `definition add` and `update`; `--unset skills` removes it.
+- `definition add`, `update` and `apply` fail for a skill that is not registered. `org start` and `org resume` do the same for member definitions.
+- The system prompt gets a list of the skills with their descriptions. The agent calls the `skill` tool with a name to load the instructions of the skill. The tool takes an optional `file` argument for a reference file of that skill, relative to its folder.
+- The `skill` tool is present whenever the definition lists a skill, even when `tools` lists none.
+- Compaction keeps the latest result of each skill call after the summary.
+
+### Freeze at start
+
+- `run`, `launch` and `org` sessions copy the listed skills to `~/.maihem/agents/<id>.skills/` before the agent starts. A missing skill fails the start and leaves no state.
+- The agent reads only this copy. `skill update` and `skill rm` do not change a running agent.
+- `maihem prune` removes the copy with the agent state.
+
+### Scripts run on the host only
+
+- In host mode (`--no-sandbox`; orgs always use it), the skill content names the frozen folder. The agent runs the scripts there with `exec`.
+- In the sandbox, scripts cannot run. The agent can only load reference files with the `file` argument. The tool reads these files on the host, also in sandbox mode.
+- Trust: in host mode, a skill's scripts run with your rights. Add only skills you trust. A skill is also prompt input.
 
 ## Configuration file
 
@@ -157,6 +203,7 @@ definitions:
     on_context_full: compact      # compact (default) | fail
     compact_at: 0.8               # default 0.8: compact at this part of the budget
     sandbox_exclude: [dist/]      # optional: more paths to keep out of the sandbox (see Sandbox mode)
+    skills: [pdf-tools]           # optional: registered skill names (see Skills)
 ```
 
 - `reasoning` is the AI SDK reasoning level. Each provider maps it to its own setting. Models without reasoning ignore it.
@@ -418,8 +465,9 @@ docs/tmp
 Everything lives under `~/.maihem` (override with `MAIHEM_HOME`):
 
 - `providers/<name>.yaml`, `definitions/<name>.yaml`, `orgs/<name>.yaml`
+- `skills/<name>/` (the registered skill folders)
 - `orgs/<name>/org.db` (tickets, milestones, comments, inbox, events), `orgs/<name>/org.log`, `orgs/<name>/worktrees/<member>`, `orgs/<name>/home` (the `HOME` of org sessions), `orgs/<name>/history/`
-- `agents/<id>.json` (state), `agents/<id>.log`, `agents/<id>.events.jsonl` (every event, for the board's replay), `agents/<id>.run.json` (while the agent runs)
+- `agents/<id>.json` (state), `agents/<id>.log`, `agents/<id>.events.jsonl` (every event, for the board's replay), `agents/<id>.run.json` (while the agent runs), `agents/<id>.skills/<name>/` (the frozen copy of its skills)
 - `worker.json`, `worker.log`
 
 Agent sockets live in the system temp directory (`maihem-<id>.sock`), because macOS limits socket paths to 104 bytes.
