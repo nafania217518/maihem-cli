@@ -23,6 +23,7 @@ import type { Org } from "./org/types.ts";
 import { VERSION } from "./version.ts";
 import { checkProviders, listProviders, loadProvider, maskProvider, removeProvider, saveProvider } from "./providers.ts";
 import type { Kind, Provider } from "./providers.ts";
+import { addSkill } from "./skills.ts";
 
 const USAGE = `usage:
   maihem definition add --name N --provider P --model M [--system S] [--tools a,b] [--no-sandbox] [--max-steps N]
@@ -57,6 +58,11 @@ const USAGE = `usage:
   maihem provider rm [-f] NAME
   maihem provider ls
   maihem provider inspect NAME
+  maihem skill add PATH
+  maihem skill update NAME PATH
+  maihem skill rm [-f] NAME
+  maihem skill ls
+  maihem skill inspect NAME
   maihem stop [--discard] ID
   maihem attach ID
   maihem logs ID
@@ -236,6 +242,15 @@ function provider(argv: string[]): boolean {
   return true;
 }
 
+function skill(argv: string[]): boolean {
+  const [sub, ...args] = argv;
+  const { positionals: [a] } = parseArgs({ args, options: {}, allowPositionals: true });
+  if (sub === "add" && a) {
+    console.log(`added ${addSkill(a)}`);
+  } else return false;
+  return true;
+}
+
 async function prune(force: boolean): Promise<void> {
   const dead = listStates().map(refresh).filter((s) => s.status === "exited");
   if (!dead.length) return console.log("nothing to prune");
@@ -288,6 +303,9 @@ export async function main(argv: string[]): Promise<number> {
       }
       case "provider":
         if (!provider(rest)) break;
+        return 0;
+      case "skill":
+        if (!skill(rest)) break;
         return 0;
       case "launch":
         return await launchCommand(resolveRunArgs(rest, "launch"));

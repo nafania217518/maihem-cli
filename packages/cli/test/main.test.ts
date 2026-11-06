@@ -253,6 +253,54 @@ describe("main", () => {
     expect(err.mock.calls[0][0]).not.toMatch(/maihem (build|images?|inspect|rmi)\b/);
     expect(loadDefinition("a").name).toBe("a");
   });
+  describe("skill", () => {
+    const src = (name: string, text = "---\ndescription: Reads PDFs\n---\nbody\n"): string => {
+      const dir = path.join(home, "src", name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "SKILL.md"), text);
+      return dir;
+    };
+    const reg = (...p: string[]) => path.join(home, "skills", ...p);
+    // req: 1-add-skills/TR-2
+    describe("add", () => {
+      it("add copies the folder with its subfolders under the resolved name", async () => {
+        const dir = src("folder", "---\nname: pdf\ndescription: d\n---\nb\n");
+        fs.mkdirSync(path.join(dir, "scripts"));
+        fs.writeFileSync(path.join(dir, "scripts", "run.sh"), "echo hi");
+        expect(await main(["skill", "add", dir])).toBe(0);
+        expect(out()).toBe("added pdf");
+        expect(fs.readFileSync(reg("pdf", "scripts", "run.sh"), "utf8")).toBe("echo hi");
+        expect(fs.existsSync(reg("pdf", "SKILL.md"))).toBe(true);
+      });
+      it("an existing name is refused with the update hint", async () => {
+        await main(["skill", "add", src("pdf")]);
+        expect(await main(["skill", "add", src("pdf")])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe('error: skill "pdf" already exists; use maihem skill update pdf PATH');
+      });
+      it("a folder without SKILL.md fails and copies nothing", async () => {
+        const dir = path.join(home, "empty");
+        fs.mkdirSync(dir);
+        expect(await main(["skill", "add", dir])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe(`error: skill: no SKILL.md in ${dir}`);
+        expect(fs.existsSync(reg())).toBe(false);
+      });
+      it("a relative symlink inside the folder stays relative", async () => {
+        const dir = src("pdf");
+        fs.symlinkSync("SKILL.md", path.join(dir, "link.md"));
+        await main(["skill", "add", dir]);
+        expect(fs.readlinkSync(reg("pdf", "link.md"))).toBe("SKILL.md");
+      });
+      it("usage lists the subcommands", async () => {
+        expect(await main(["skill"])).toBe(1);
+        for (const s of ["skill add PATH", "skill update NAME PATH", "skill rm [-f] NAME", "skill ls", "skill inspect NAME"]) expect(err.mock.calls[0][0]).toContain(`maihem ${s}`);
+      });
+      it("add without PATH prints the usage", async () => {
+        expect(await main(["skill", "add"])).toBe(1);
+        expect(err.mock.calls[0][0]).toMatch(/^usage/);
+      });
+    });
+  });
+
   describe("provider", () => {
     const add = (...a: string[]) => main(["provider", "add", ...a]);
     it("provider add then ls and inspect (masked)", async () => {
