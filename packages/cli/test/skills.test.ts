@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseSkill } from "../src/skills.ts";
+import { addSkill, loadSkill, parseSkill, updateSkill } from "../src/skills.ts";
 
 // req: 1-add-skills/TR-1
 describe("parseSkill", () => {
@@ -107,5 +107,40 @@ describe("parseSkill with blank fields", () => {
   });
   it("a block description loses its trailing newline", () => {
     expect(parseSkill(skill("x", "---\ndescription: |\n  Reads PDFs\n---\nb\n")).description).toBe("Reads PDFs");
+  });
+});
+
+// req: 1-add-skills/TR-15
+describe("addSkill and updateSkill when the copy fails", () => {
+  let root: string;
+  const source = (text: string, unreadable: boolean): string => {
+    const dir = fs.mkdtempSync(path.join(root, "src-"));
+    fs.writeFileSync(path.join(dir, "SKILL.md"), text);
+    fs.mkdirSync(path.join(dir, "assets"));
+    const asset = path.join(dir, "assets", "a.txt");
+    fs.writeFileSync(asset, "a");
+    if (unreadable) fs.chmodSync(asset, 0o000);
+    return dir;
+  };
+  const skills = (): string[] => fs.readdirSync(path.join(root, "home", "skills"));
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "mh-sk-"));
+    process.env.MAIHEM_HOME = path.join(root, "home");
+  });
+
+  it("a failed add copy leaves nothing registered", () => {
+    expect(() => addSkill(source("---\nname: aa\ndescription: d\n---\n", true))).toThrow(/EACCES/);
+    expect(skills()).toEqual([]);
+  });
+  it("a retry after a failed add copy succeeds", () => {
+    expect(() => addSkill(source("---\nname: aa\ndescription: d\n---\n", true))).toThrow(/EACCES/);
+    expect(addSkill(source("---\nname: aa\ndescription: d\n---\n", false))).toBe("aa");
+    expect(skills()).toEqual(["aa"]);
+  });
+  it("a failed update copy keeps the old copy and leaves no .NAME.new", () => {
+    addSkill(source("---\nname: aa\ndescription: old\n---\n", false));
+    expect(() => updateSkill("aa", source("---\nname: aa\ndescription: new\n---\n", true))).toThrow(/EACCES/);
+    expect(loadSkill("aa").description).toBe("old");
+    expect(skills()).toEqual(["aa"]);
   });
 });

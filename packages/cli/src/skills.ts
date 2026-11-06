@@ -45,10 +45,23 @@ const skillDir = (name: string): string => path.join(home(), "skills", name);
 // verbatimSymlinks: Node otherwise rewrites relative symlinks to absolute paths into the source folder
 const copyFolder = (from: string, to: string): void => fs.cpSync(from, to, { recursive: true, verbatimSymlinks: true });
 
+// Copies to the hidden .NAME.new sibling, so a failed copy never leaves a half-copied skill registered.
+function copyToFresh(name: string, src: string): string {
+  const fresh = skillDir(`.${name}.new`);
+  fs.rmSync(fresh, { recursive: true, force: true });
+  try {
+    copyFolder(src, fresh);
+  } catch (e) {
+    fs.rmSync(fresh, { recursive: true, force: true });
+    throw e;
+  }
+  return fresh;
+}
+
 export function addSkill(src: string): string {
   const { name } = parseSkill(src);
   if (fs.existsSync(skillDir(name))) throw new Error(`skill "${name}" already exists; use maihem skill update ${name} PATH`);
-  copyFolder(src, skillDir(name));
+  fs.renameSync(copyToFresh(name, src), skillDir(name));
   return name;
 }
 
@@ -76,14 +89,9 @@ export function updateSkill(name: string, src: string): void {
   loadSkill(name);
   const parsed = parseSkill(src);
   if (parsed.name !== name) throw new Error(`skill update: ${src} holds skill "${parsed.name}", not "${name}"`);
-  const target = skillDir(name), fresh = skillDir(`.${name}.new`), old = skillDir(`.${name}.old`);
-  for (const d of [fresh, old]) fs.rmSync(d, { recursive: true, force: true });
-  try {
-    copyFolder(src, fresh);
-  } catch (e) {
-    fs.rmSync(fresh, { recursive: true, force: true });
-    throw e;
-  }
+  const target = skillDir(name), old = skillDir(`.${name}.old`);
+  fs.rmSync(old, { recursive: true, force: true });
+  const fresh = copyToFresh(name, src);
   fs.renameSync(target, old);
   fs.renameSync(fresh, target);
   fs.rmSync(old, { recursive: true, force: true });
