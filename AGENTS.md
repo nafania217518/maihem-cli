@@ -132,3 +132,4 @@ Format: the caveat line of the armory `core` skill, section Reports
 - Node defers spawn errors to process.nextTick with child.pid undefined; spawnAgent relies on this to save the running state first : packages/cli/src/run.ts
 - A spawn failure in an org backs off like a transient session.failed and also counts toward the park cap; the park message names the spawn error : packages/cli/src/org/daemon.ts
 - AgentState.pid is optional, because a failed spawn saves no pid; stop treats a falsy pid (also 0) as not running, and the org-daemon stop sends no signal without a pid : packages/cli/src/main.ts
+- refresh leaves a running state without a pid alone, so a parent SIGKILLed between the first save and the spawn leaves a state that reads running until removed by hand : packages/cli/src/state.ts
