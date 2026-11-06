@@ -80,3 +80,32 @@ describe("parseSkill", () => {
     expect(() => parseSkill(dir)).toThrow(`skill: no SKILL.md in ${dir}`);
   });
 });
+
+// req: 1-add-skills/TR-16
+describe("parseSkill with blank fields", () => {
+  let root: string;
+  const skill = (name: string, text: string): string => {
+    const dir = path.join(root, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "SKILL.md"), text);
+    return dir;
+  };
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "mh-sk-")); });
+
+  it("a blank description: falls back to the first body line", () => {
+    expect(parseSkill(skill("x", "---\nname: pdf\ndescription:\n---\n# PDF tools\n")).description).toBe("PDF tools");
+  });
+  it("a blank name: falls back to the folder name", () => {
+    expect(parseSkill(skill("pdf", "---\nname:\ndescription: d\n---\nb\n")).name).toBe("pdf");
+  });
+  it("a whitespace-only description falls back to the first body line", () => {
+    expect(parseSkill(skill("x", "---\ndescription: \"   \"\n---\nHello\n")).description).toBe("Hello");
+  });
+  it("a whitespace-only description with an empty body is refused", () => {
+    expect(() => parseSkill(skill("x", "---\ndescription: \"  \"\n---\n\n")))
+      .toThrow('skill "x": no description; add description: to the front matter or a first line to the body of SKILL.md');
+  });
+  it("a block description loses its trailing newline", () => {
+    expect(parseSkill(skill("x", "---\ndescription: |\n  Reads PDFs\n---\nb\n")).description).toBe("Reads PDFs");
+  });
+});

@@ -29,12 +29,14 @@ export function parseSkill(dir: string): Skill {
   if (!fs.existsSync(file)) throw new Error(`skill: no SKILL.md in ${dir}`);
   const { fields, body } = splitFrontMatter(file, fs.readFileSync(file, "utf8"));
   for (const k of ["name", "description"]) {
+    // a field with no value parses to null; treat it as absent
+    if (fields[k] === null) delete fields[k];
     if (fields[k] !== undefined && typeof fields[k] !== "string") throw new Error(`skill: ${file}: "${k}" must be text`);
   }
   const name = (fields.name as string | undefined) ?? path.basename(dir);
   if (!SKILL_NAME.test(name) || name.length > 64) throw new Error(`skill: invalid name "${name}": use lowercase letters, digits and single hyphens, at most 64 characters`);
   const firstLine = body.split(/\r?\n/).map((l) => l.trim()).find(Boolean)?.replace(/^[#\s]+/, "");
-  const description = (fields.description as string | undefined) || firstLine;
+  const description = (fields.description as string | undefined)?.trim() || firstLine;
   if (!description) throw new Error(`skill "${name}": no description; add description: to the front matter or a first line to the body of SKILL.md`);
   return { name, description, body, dir };
 }
