@@ -647,6 +647,15 @@ describe("org daemon helpers", () => {
     expect(() => loadRunnable("gone")).toThrow(`org "gone": repo ${path.join(work, "nope")} does not exist`);
   });
 
+  // req: 1-add-skills/TR-8
+  it("loadRunnable refuses a member definition whose skill is missing", () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "wd-"));
+    const members = Object.fromEntries(["ba", "sa", "pm", "tl", "dev"].map((r) => [r, { role: r, definition: "d2" }]));
+    saveOrg(validateOrg({ name: "skilled", repo: work, members }));
+    saveDefinition(parseDefinition(JSON.stringify({ name: "d2", provider: "p", model: "m", skills: ["gone"] })));
+    expect(() => loadRunnable("skilled")).toThrow("no such skill: gone; add it: maihem skill add PATH");
+  });
+
   it("expandRepo expands ~ and orgPid reads a live pid", () => {
     expect(expandRepo("~/r")).toBe(path.join(os.homedir(), "r"));
     expect(orgPid("acme")).toBeUndefined();

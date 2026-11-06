@@ -9,6 +9,7 @@ import type { Definition } from "../definition.ts";
 import { resolveProvider } from "../providers.ts";
 import { home, loadDefinition } from "../registry.ts";
 import { spawnAgent } from "../run.ts";
+import { loadSkill } from "../skills.ts";
 import { isAlive, loadState } from "../state.ts";
 import { createBus, execute } from "./bus.ts";
 import type { Io, View } from "./bus.ts";
@@ -52,6 +53,7 @@ export function loadRunnable(name: string): { org: Org; defs: Record<string, Def
   if (!fs.existsSync(org.repo)) throw new Error(`org "${name}": repo ${org.repo} does not exist`);
   const defs = Object.fromEntries(Object.values(org.members).map(({ definition: d }) => [d, loadDefinition(d)]));
   crossCheck(org, (d) => d in defs);
+  for (const d of Object.values(defs)) for (const s of d.skills ?? []) loadSkill(s);
   return { org, defs };
 }
 
