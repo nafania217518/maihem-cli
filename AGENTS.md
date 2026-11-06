@@ -115,6 +115,7 @@ Format: the caveat line of the armory `core` skill, section Reports
 - An empty front matter block parses to null under yaml 2.9.1; skills.ts reads it as no fields : packages/cli/src/skills.ts
 - skill rm -f during an org run stops the org daemon at the next session spawn; org/daemon.ts spawn has no catch : packages/cli/src/org/daemon.ts
 - loadSkill checks the name against SKILL_NAME before it touches the disk, so skill inspect ../x reports "no such skill" instead of reading outside the registry : packages/cli/src/skills.ts
-- skill update swaps through the hidden sibling folders .NAME.new and .NAME.old, and skill ls skips dot-folders : packages/cli/src/skills.ts
+- skill add and skill update copy through the hidden sibling folder .NAME.new (update also .NAME.old), and skill ls skips dot-folders : packages/cli/src/skills.ts
 - A fresh worktree needs the ignored, generated packages/worker/worker-configuration.d.ts before the lint gate passes : packages/worker/tsconfig.json
 - One registered SKILL.md that fails to parse makes skill ls fail, along with skill rm and skill update for that skill; only a manual delete clears it : packages/cli/src/skills.ts
+- The TR-15 tests make a copy fail with a chmod 000 file, so they fail when the tests run as root : packages/cli/test/skills.test.ts
