@@ -126,3 +126,5 @@ Format: the caveat line of the armory `core` skill, section Reports
 - The vitest text coverage report leaves out files at 100%; a module missing from it is fully covered : vitest.config.ts
 - The AI SDK keeps input: null on an invalid tool call, because its non-object fallback treats null as an object : packages/cli/src/compact.ts
 - spawnAgent closes the log fd in a finally block and removes the whole state when deps.spawn throws : packages/cli/src/run.ts
+- Node spawn reports ENOENT, EACCES, EAGAIN and EMFILE through a later error event, so the spawnAgent catch covers only rare spawn errors that throw at once : packages/cli/src/run.ts
+- When the update rollback rename also fails, the skill stays only at the hidden .NAME.old, and ls and update no longer see it : packages/cli/src/skills.ts
