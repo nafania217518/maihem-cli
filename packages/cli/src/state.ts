@@ -72,6 +72,6 @@ export function refresh(s: AgentState): AgentState {
 }
 
 export function removeState(s: AgentState): void {
-  if (fs.existsSync(dir())) for (const f of fs.readdirSync(dir())) if (f.startsWith(`${s.id}.`)) fs.rmSync(path.join(dir(), f), { force: true });
+  if (fs.existsSync(dir())) for (const f of fs.readdirSync(dir())) if (f.startsWith(`${s.id}.`)) fs.rmSync(path.join(dir(), f), { recursive: true, force: true });
   fs.rmSync(s.sock, { force: true });
 }

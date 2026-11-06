@@ -81,4 +81,14 @@ describe("state", () => {
     removeState(a);
     expect(fs.existsSync(eventsPath("rm2"))).toBe(false);
   });
+  // req: 1-add-skills/TR-9
+  it("removeState removes the frozen skills folder", () => {
+    const a = mk("rm3", "2026-01-01T00:00:00.000Z");
+    saveState(a);
+    const skills = path.join(home, "agents", "rm3.skills");
+    fs.mkdirSync(path.join(skills, "pdf"), { recursive: true });
+    fs.writeFileSync(path.join(skills, "pdf", "SKILL.md"), "d\n");
+    removeState(a);
+    expect(fs.existsSync(skills)).toBe(false);
+  });
 });
