@@ -180,6 +180,17 @@ The BR list is in the task item. Each test that proves a TR carries `// req: 1-a
   It MUST also add `skills` to the Configuration file field list, and `skills/<name>/` and `agents/<id>.skills/` to State.
   - tests: none, prose; checked in review.
 
+- TR-15 (BR-1): MUST make `skill add` copy to the hidden `.NAME.new` sibling and rename it to the target only after the copy succeeds; a failed copy MUST leave no `skills/NAME` folder and no `.NAME.new`. `addSkill` and `updateSkill` share one copy-then-rename helper. (Defect found in review of TR-2.)
+  - tests: `skills.test.ts`:
+    - a failed add copy leaves nothing registered and a retry succeeds
+    - a failed update copy keeps the old copy and leaves no `.NAME.new` (covers skills.ts:82-83)
+- TR-16 (BR-2): MUST treat a front-matter `name` or `description` whose value is null (`description:` with no value) as absent, so the defaults apply; MUST trim a given description, and an empty trimmed description MUST fall back to the first body line, else be refused with the TR-1 no-description error. (Defect found in review of TR-1.)
+  - tests: `skills.test.ts`:
+    - a blank `description:` falls back to the first body line
+    - a blank `name:` falls back to the folder name
+    - a whitespace-only description falls back, or is refused when the body is empty
+    - a block (`|`) description loses its trailing newline
+
 ## Test scope
 
 No existing case breaks, reworks or is removed. Three close calls:
