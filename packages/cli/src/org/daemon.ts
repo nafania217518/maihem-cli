@@ -70,6 +70,13 @@ export const transient = (d: OrgEvent["data"]): boolean => {
   const st = Number(d.status), err = String(d.error ?? "");
   return st === 429 || st >= 500 || (st >= 200 && st < 300) || err.startsWith("empty answer") || err.startsWith("stream cut") || (!d.status && /fetch failed|ECONNREFUSED|ETIMEDOUT|socket/i.test(err));
 };
+// the detail of a session whose process never started; it logs no session event
+const spawnError = (id: string): string | undefined => {
+  try {
+    const st = loadState(id);
+    return st.status === "exited" && st.detail?.startsWith("spawn failed:") ? st.detail : undefined;
+  } catch { return undefined; } // no state file: the session left nothing to read
+};
 // slot order (status-workflow.md §5)
 const SLOT: Partial<Record<Status, number>> = { needs_reply: 0, in_review: 1, in_progress: 2, todo: 3, triage: 4 };
 
@@ -209,12 +216,13 @@ export async function runOrg(name: string, goal: string, deps: OrgDeps, signal?:
     delete sessions[m];
     const e = outcome.get(s.id);
     outcome.delete(s.id);
-    if (e?.kind === "session.failed" && transient(e.data)) {
+    const failedSpawn = e ? undefined : spawnError(s.id);
+    if (failedSpawn || (e?.kind === "session.failed" && transient(e.data))) {
       const b = backoff[s.ticket] ?? { until: 0, n: 0 };
       backoff[s.ticket] = { until: Date.now() + Math.min(retryMs * 2 ** b.n, maxBackoff), n: b.n + 1 };
-      return;
-    }
-    delete backoff[s.ticket];
+      // a spawn error does not heal by itself, so it still counts toward parking the ticket
+      if (!failedSpawn) return;
+    } else delete backoff[s.ticket];
     // a no-op: no transition on its ticket since the session started; a triage session, for each batch ticket left in Triage
     const evs = t.events(s.since).filter((x) => transition(x) || (x.kind === "approval.set" && x.actor === m));
     const left = s.kind === "triage" ? (s.batch ?? []).filter((x) => t.getTicket(x).status === "triage") : evs.some((x) => x.ticket === s.ticket) ? [] : [s.ticket];
@@ -222,7 +230,7 @@ export async function runOrg(name: string, goal: string, deps: OrgDeps, signal?:
       const k = `${m} ${id}`, n = noops[k] = (noops[k] ?? 0) + 1;
       if (n < noopCap || !isOpen(t.getTicket(id).status)) continue;
       delete noops[k];
-      const text = e?.data.text ? String(e.data.text) : "(none)";
+      const text = e?.data.text ? String(e.data.text) : failedSpawn ?? "(none)";
       try { ops.parkForHuman(id, `${m} ended ${n} sessions on ${id} without a transition. The last session's final text: ${text}`); }
       catch { /* it already waits for the human */ }
     }

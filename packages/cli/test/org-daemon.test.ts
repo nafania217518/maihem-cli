@@ -15,6 +15,7 @@ import { openTracker } from "../src/org/tracker.ts";
 import type { Tracker } from "../src/org/tracker.ts";
 import { dbFile, defaultDeps, transient, expandRepo, loadRunnable, orgDir, orgPid, pidFile, runOrg, runOrgMain } from "../src/org/daemon.ts";
 import type { OrgDeps } from "../src/org/daemon.ts";
+import { logPath, saveState, sockPath } from "../src/state.ts";
 import type { InboxItem, Org, Wake } from "../src/org/types.ts";
 
 let home: string, repo: string, n: number, u: Tracker | undefined;
@@ -28,7 +29,7 @@ const org = (limits: Partial<Org["limits"]> = {}, extra: Record<string, object> 
 
 // a fake session: acts through ops as the member on the same db and writes files into its worktree (def.workdir)
 interface Ctx { t: Tracker; ops: Ops; member: string; ticket: string; kind: Wake["kind"]; task: string; wt: string; id: string }
-type Agent = (c: Ctx) => void | "fail" | 429; // "fail" or 429: the session logs session.failed
+type Agent = (c: Ctx) => void | "fail" | 429 | "nospawn"; // "fail" or 429: the session logs session.failed; "nospawn": its process never started
 interface Spawn { at: number; id: string; member: string; ticket: string; kind: Wake["kind"]; batch?: string[]; task: string; system: string; tools: string[]; reasoning?: string; wt: string; branch: string; head: string; status: string }
 function fake(script: Record<string, Agent>, o: Partial<OrgDeps> = {}) {
   const spawned: Spawn[] = [], stopped: string[] = [];
@@ -43,7 +44,8 @@ function fake(script: Record<string, Agent>, o: Partial<OrgDeps> = {}) {
       spawned.push({ at: Date.now(), id, member, ticket, kind, batch, task, system: d.system!, tools: d.tools, reasoning: d.reasoning, wt: w, branch: git(w, "branch", "--show-current"), head: git(w, "log", "-1", "--format=%an <%ae>|%s"), status: ticket ? t.getTicket(ticket).status : "" });
       t.log("session.started", member, { member, id }, ticket);
       const r = script[member]?.({ t, ops: createOps(t, og), member, ticket, kind, task, wt: w, id });
-      if (r === "fail" || r === 429) t.log("session.failed", member, { member, id, error: "boom", ...(r === 429 && { status: 429 }) }, ticket);
+      if (r === "nospawn") saveState({ id, name: member, pid: 0, status: "exited", exitCode: 1, detail: "spawn failed: spawn ENOENT", workdir: w, sandbox: false, started: new Date().toISOString(), log: logPath(id), sock: sockPath(id) });
+      else if (r === "fail" || r === 429) t.log("session.failed", member, { member, id, error: "boom", ...(r === 429 && { status: 429 }) }, ticket);
       else t.log("session.ended", member, { member, id, tokens: 10, input: 7, output: 3, text: `last words of ${id}` }, ticket);
       t.close();
       return id;
@@ -566,6 +568,21 @@ describe("org runner", () => {
     expect(at).toEqual(Array(5).fill("in_progress"));
     const t = f.spawned.map((x) => x.at);
     expect([t[1] - t[0], t[2] - t[1], t[3] - t[2]].map((d, i) => d >= 10 * 2 ** i)).toEqual([true, true, true]);
+  });
+
+  // req: 1-add-skills/TR-21
+  it("a session that failed to spawn backs off like a transient failure", async () => {
+    const f = fake({ ba: () => "nospawn" }, { retryMs: 150 });
+    await until(f, () => f.spawned.filter((x) => x.member === "ba").length >= 3);
+    const t = f.spawned.filter((x) => x.member === "ba").map((x) => x.at);
+    expect([t[1] - t[0], t[2] - t[1]].map((d, i) => d >= 150 * 2 ** i)).toEqual([true, true]);
+  });
+
+  // req: 1-add-skills/TR-21
+  it("three failed spawns park the ticket with the spawn error", async () => {
+    const f = fake({ ba: () => "nospawn" }, { retryMs: 1 });
+    await until(f, (t) => t.getTicket("T-2").status === "needs_reply");
+    expect(db().getTicket("T-2").comments.at(-1)!.text).toBe("ba ended 3 sessions on T-2 without a transition. The last session's final text: spawn failed: spawn ENOENT");
   });
 
   it("an idle org waits for the human answer", async () => {
