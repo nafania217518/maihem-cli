@@ -199,6 +199,9 @@ The BR list is in the task item. Each test that proves a TR carries `// req: 1-a
 - TR-19 (BR-10): MUST make `spawnAgent` leave no state file and no `agents/<id>.skills` folder when `deps.spawn` throws: call `removeState` and rethrow. (Amendment approved at the recorded-items quiz.)
   - tests: `run.test.ts`: a spawn that throws leaves no state and no frozen skills folder
 
+- TR-20 (BR-12): MUST attach an `error` listener to the child in `spawnAgent` that saves the state as exited with exitCode 1 and detail `spawn failed: <message>`. (Amendment approved during the task; BR-12 is in the task item.)
+  - tests: `run.test.ts`: an async spawn error marks the state exited with the detail and does not throw
+
 ## Test scope
 
 No existing case breaks, reworks or is removed. Three close calls:
