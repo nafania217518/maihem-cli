@@ -129,3 +129,5 @@ Format: the caveat line of the armory `core` skill, section Reports
 - Node spawn reports ENOENT, EACCES, EAGAIN and EMFILE through a later error event, so the spawnAgent catch covers only rare spawn errors that throw at once : packages/cli/src/run.ts
 - When the update rollback rename also fails, the skill stays only at the hidden .NAME.old, and ls and update no longer see it : packages/cli/src/skills.ts
 - spawnAgent saves the running state with pid undefined when the spawn fails later through the error event : packages/cli/src/run.ts
+- Node defers spawn errors to process.nextTick with child.pid undefined; spawnAgent relies on this to save the running state first : packages/cli/src/run.ts
+- The org daemon reaps a session whose process failed to start as a no-op, not as a transient failure : packages/cli/src/org/daemon.ts
