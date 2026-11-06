@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { addSkill, loadSkill, parseSkill, updateSkill } from "../src/skills.ts";
+import { addSkill, createSkillTool, freezeSkills, loadSkill, parseSkill, skillCatalog, updateSkill } from "../src/skills.ts";
+import type { Skill } from "../src/skills.ts";
 
 // req: 1-add-skills/TR-1
 describe("parseSkill", () => {
@@ -142,5 +143,137 @@ describe("addSkill and updateSkill when the copy fails", () => {
     expect(() => updateSkill("aa", source("---\nname: aa\ndescription: new\n---\n", true))).toThrow(/EACCES/);
     expect(loadSkill("aa").description).toBe("old");
     expect(skills()).toEqual(["aa"]);
+  });
+});
+
+const newHome = (): string => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mh-sk-"));
+  process.env.MAIHEM_HOME = path.join(root, "home");
+  return root;
+};
+const source = (root: string, name: string, files: Record<string, string> = {}): string => {
+  const dir = path.join(root, "src", name);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "SKILL.md"), `---\ndescription: ${name} skill\n---\n# ${name}\n`);
+  for (const [f, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+    fs.writeFileSync(path.join(dir, f), text);
+  }
+  return dir;
+};
+const frozen = (id: string, name = ""): string => path.join(process.env.MAIHEM_HOME!, "agents", `${id}.skills`, name);
+
+// req: 1-add-skills/TR-7
+describe("freezeSkills", () => {
+  let root: string;
+  beforeEach(() => { root = newHome(); });
+
+  it("copies under agents/ID.skills", () => {
+    addSkill(source(root, "pdf", { "ref/a.md": "A" }));
+    const [s] = freezeSkills(["pdf"], "id1");
+    expect(s.dir).toBe(frozen("id1", "pdf"));
+    expect(fs.readFileSync(frozen("id1", "pdf/ref/a.md"), "utf8")).toBe("A");
+  });
+  it("no skills creates nothing", () => {
+    expect(freezeSkills([], "id1")).toEqual([]);
+    expect(fs.existsSync(frozen("id1"))).toBe(false);
+  });
+  it("one missing skill copies nothing and names it", () => {
+    addSkill(source(root, "pdf"));
+    expect(() => freezeSkills(["pdf", "gone"], "id1")).toThrow("no such skill: gone; add it: maihem skill add PATH");
+    expect(fs.existsSync(frozen("id1"))).toBe(false);
+  });
+  it("a failed copy leaves no ID.skills folder", () => {
+    addSkill(source(root, "pdf", { "a.md": "A" }));
+    fs.chmodSync(path.join(process.env.MAIHEM_HOME!, "skills", "pdf", "a.md"), 0o000);
+    expect(() => freezeSkills(["pdf"], "id1")).toThrow(/EACCES/);
+    expect(fs.existsSync(frozen("id1"))).toBe(false);
+  });
+  it("a later update does not change the frozen copy", () => {
+    addSkill(source(root, "pdf", { "a.md": "old" }));
+    freezeSkills(["pdf"], "id1");
+    const next = path.join(root, "next", "pdf");
+    fs.cpSync(path.join(root, "src", "pdf"), next, { recursive: true });
+    fs.writeFileSync(path.join(next, "a.md"), "new");
+    updateSkill("pdf", next);
+    expect(fs.readFileSync(frozen("id1", "pdf/a.md"), "utf8")).toBe("old");
+  });
+});
+
+// req: 1-add-skills/TR-10
+describe("skillCatalog", () => {
+  it("escapes & < > \" ' in names and descriptions", () => {
+    const text = skillCatalog([{ name: "pdf", description: `a & <b> "c" 'd'`, body: "", dir: "/x" }]);
+    expect(text).toContain("<available_skills><skill><name>pdf</name><description>a &amp; &lt;b&gt; &quot;c&quot; &apos;d&apos;</description></skill></available_skills>");
+  });
+});
+
+describe("skill tool", () => {
+  let root: string;
+  let skill: Skill;
+  const call = (input: { name: string; file?: string }, sandbox = false): Promise<string> =>
+    (createSkillTool([skill], sandbox).execute as (i: unknown, o: unknown) => Promise<string>)(input, {});
+  beforeEach(() => {
+    root = newHome();
+    addSkill(source(root, "pdf", { "ref/b.md": "B text", "ref/a.md": "A text", "bin.dat": "x\0y" }));
+    fs.mkdirSync(path.join(root, "outside"));
+    fs.writeFileSync(path.join(root, "outside", "secret.txt"), "secret");
+    [skill] = freezeSkills(["pdf"], "id1");
+    fs.symlinkSync(path.join(root, "outside", "secret.txt"), path.join(skill.dir, "leak.txt"));
+  });
+
+  // req: 1-add-skills/TR-11
+  it("body in skill_content with resources", async () => {
+    expect(await call({ name: "pdf" })).toBe(`<skill_content name="pdf">\n# pdf\n\nSkill folder: ${skill.dir}. Relative paths in this skill resolve against this folder; run its scripts there with exec.\n`
+      + "<skill_resources>\n<file>bin.dat</file>\n<file>leak.txt</file>\n<file>ref/a.md</file>\n<file>ref/b.md</file>\n</skill_resources>\n</skill_content>");
+  });
+  // req: 1-add-skills/TR-11
+  it("no resources block for a SKILL.md alone", async () => {
+    addSkill(source(root, "solo"));
+    [skill] = freezeSkills(["solo"], "id2");
+    expect(await call({ name: "solo" })).not.toContain("skill_resources");
+  });
+  // req: 1-add-skills/TR-11
+  it("returns a reference file", async () => {
+    expect(await call({ name: "pdf", file: "ref/a.md" })).toBe("A text");
+  });
+  // req: 1-add-skills/TR-11
+  it("refuses an absolute path", async () => {
+    expect(await call({ name: "pdf", file: "/etc/passwd" })).toBe("error: file must be a path relative to the skill folder");
+  });
+  // req: 1-add-skills/TR-11
+  it("refuses ..", async () => {
+    expect(await call({ name: "pdf", file: "../../x" })).toBe("error: ../../x is outside the skill folder");
+  });
+  // req: 1-add-skills/TR-11
+  it("refuses a symlink that points outside", async () => {
+    expect(await call({ name: "pdf", file: "leak.txt" })).toBe("error: leak.txt is outside the skill folder");
+  });
+  // req: 1-add-skills/TR-11
+  it("reports a missing file", async () => {
+    expect(await call({ name: "pdf", file: "nope.md" })).toBe('error: nope.md does not exist in skill "pdf"');
+  });
+  // req: 1-add-skills/TR-11
+  it("reports a directory", async () => {
+    expect(await call({ name: "pdf", file: "ref" })).toBe("error: ref is a directory");
+  });
+  // req: 1-add-skills/TR-11
+  it("refuses a binary file", async () => {
+    expect(await call({ name: "pdf", file: "bin.dat" })).toBe("error: bin.dat is not a text file");
+  });
+  // req: 1-add-skills/TR-11
+  it("the name schema accepts only the definition's skills", () => {
+    const schema = createSkillTool([skill], false).inputSchema as { safeParse: (v: unknown) => { success: boolean } };
+    expect([schema.safeParse({ name: "pdf" }).success, schema.safeParse({ name: "other" }).success]).toEqual([true, false]);
+  });
+  // req: 1-add-skills/TR-12
+  it("host mode names the frozen folder", async () => {
+    expect(await call({ name: "pdf" })).toContain(`Skill folder: ${frozen("id1", "pdf")}. `);
+  });
+  // req: 1-add-skills/TR-12
+  it("sandbox mode says scripts cannot run and names the file argument", async () => {
+    const text = await call({ name: "pdf" }, true);
+    expect(text).toContain('Scripts in this skill cannot run in this sandbox. Load its reference files with skill({ name: "pdf", file: "<path>" }).');
+    expect(text).not.toContain("Skill folder:");
   });
 });

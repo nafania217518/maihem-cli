@@ -13,6 +13,7 @@ import { resolveRunArgs } from "../src/main.ts";
 import { saveProvider } from "../src/providers.ts";
 import { saveDefinition } from "../src/registry.ts";
 import { parseDefinition } from "../src/definition.ts";
+import { addSkill } from "../src/skills.ts";
 
 const definition = (name: string, provider: string) => saveDefinition(parseDefinition(JSON.stringify({ name, provider, model: "m" })));
 
@@ -237,7 +238,85 @@ describe("run", () => {
     expect(s.name).toBe("acme/ba");
     expect(JSON.parse(fs.readFileSync(runFile(s.id), "utf8"))).toMatchObject({ org });
   });
-  const launch = (...a: string[]) => launchCommand(resolveRunArgs(args(...a).slice(1)));
+  const addPdf = (): void => {
+    const src = path.join(work, "..", `pdf-src-${path.basename(work)}`, "pdf");
+    fs.mkdirSync(src, { recursive: true });
+    fs.writeFileSync(path.join(src, "SKILL.md"), "---\ndescription: Reads PDFs\n---\n# PDF\n");
+    addSkill(src);
+  };
+  const skilled = (system?: string, tools?: string[]) => saveDefinition(parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m", skills: ["pdf"], ...(system && { system }), ...(tools && { tools }) })));
+  const catalog = "Before a task that matches a skill's description, call the skill tool with that skill's name.\n<available_skills><skill><name>pdf</name><description>Reads PDFs</description></skill></available_skills>";
+  const lastOpts = () => fake.opts.at(-1) as { system?: string; tools: Record<string, { execute: (i: unknown, o: unknown) => Promise<string> }> };
+  // req: 1-add-skills/TR-7
+  it("run with a missing skill fails before the start and leaves no state", async () => {
+    skilled();
+    fake.opts.length = 0;
+    expect(await main(args("--no-sandbox", "do it"))).toBe(1);
+    expect(err).toContain("no such skill: pdf; add it: maihem skill add PATH");
+    expect(listStates()).toEqual([]);
+    expect(fake.opts).toEqual([]);
+  });
+  // req: 1-add-skills/TR-7
+  it("run -d and launch with a missing skill spawn nothing", async () => {
+    skilled();
+    const spawn = vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    expect(await main(args("-d", "--no-sandbox", "x"))).toBe(1);
+    expect(err).toContain("no such skill: pdf");
+    await expect(launch("-d", "--no-sandbox")).rejects.toThrow("no such skill: pdf");
+    expect(spawn).not.toHaveBeenCalled();
+    expect(listStates()).toEqual([]);
+  });
+  // req: 1-add-skills/TR-7
+  it("spawnAgent freezes the named skills", () => {
+    addPdf();
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 7, unref: vi.fn() } as never);
+    const def = { ...parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m", skills: ["pdf"] })), workdir: work, sandbox: false };
+    const s = spawnAgent(def, "t", { name: "t", kind: "openai", api_key: "k" } as never, "run");
+    expect(fs.readFileSync(path.join(home, "agents", `${s.id}.skills`, "pdf", "SKILL.md"), "utf8")).toContain("Reads PDFs");
+  });
+  // req: 1-add-skills/TR-10
+  it("catalog after the system prompt", async () => {
+    addPdf(); skilled("Be brief.");
+    fake.opts.length = 0;
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    expect(lastOpts().system).toBe(`Be brief.\n\n${catalog}`);
+  });
+  // req: 1-add-skills/TR-10
+  it("catalog alone without a system prompt", async () => {
+    addPdf(); skilled();
+    fake.opts.length = 0;
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    expect(lastOpts().system).toBe(catalog);
+  });
+  // req: 1-add-skills/TR-10
+  it("no skills leaves the system prompt unchanged", async () => {
+    saveDefinition(parseDefinition(JSON.stringify({ name: "img", provider: "t", model: "m", system: "Be brief." })));
+    fake.opts.length = 0;
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    expect(lastOpts().system).toBe("Be brief.");
+  });
+  // req: 1-add-skills/TR-11
+  it("skill tool present even when tools lists none", async () => {
+    addPdf(); skilled(undefined, []);
+    fake.opts.length = 0;
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    expect(Object.keys(lastOpts().tools)).toEqual(["skill"]);
+  });
+  // req: 1-add-skills/TR-11
+  it("no skill tool without skills", async () => {
+    fake.opts.length = 0;
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    expect(lastOpts().tools).not.toHaveProperty("skill");
+  });
+  // req: 1-add-skills/TR-12
+  it("run --no-sandbox gives the host note", async () => {
+    addPdf(); skilled();
+    fake.opts.length = 0;
+    expect(await main(args("--no-sandbox", "do it"))).toBe(0);
+    const [s] = listStates();
+    expect(await lastOpts().tools.skill.execute({ name: "pdf" }, {})).toContain(`Skill folder: ${path.join(home, "agents", `${s.id}.skills`, "pdf")}. `);
+  });
+  const launch =(...a: string[]) => launchCommand(resolveRunArgs(args(...a).slice(1)));
   it("launch -d prints the id without attaching", async () => {
     vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
     const attach = vi.spyOn(deps, "attach").mockResolvedValue();

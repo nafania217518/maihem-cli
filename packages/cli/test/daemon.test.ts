@@ -70,6 +70,42 @@ describe("daemon", () => {
   });
   afterEach(async () => { await handle?.shutdown(); handle = undefined; fake.agent = undefined; vi.restoreAllMocks(); });
 
+  const frozenPdf = (description: string): void => {
+    const dir = path.join(process.env.MAIHEM_HOME!, "agents", `${id}.skills`, "pdf");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "SKILL.md"), `---\ndescription: ${description}\n---\nbody\n`);
+  };
+  const withSkills = (over: object): void => {
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    fs.writeFileSync(runFile(id), JSON.stringify({ ...run, def: { ...run.def, skills: ["pdf"] }, ...over }));
+  };
+  // req: 1-add-skills/TR-10
+  it("the daemon reads the frozen copy, not the registry", async () => {
+    setup();
+    withSkills({});
+    frozenPdf("frozen copy");
+    const reg = path.join(process.env.MAIHEM_HOME!, "skills", "pdf");
+    fs.mkdirSync(reg, { recursive: true });
+    fs.writeFileSync(path.join(reg, "SKILL.md"), "---\ndescription: registry copy\n---\nbody\n");
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    const { system } = fake.opts.at(-1) as { system: string };
+    expect(system).toContain("<description>frozen copy</description>");
+    expect(system).not.toContain("registry copy");
+  });
+  // req: 1-add-skills/TR-10
+  it("an org session gets the catalog after the org system prompt", async () => {
+    setup({ task: "go" });
+    saveOrg(acme(work));
+    const run = JSON.parse(fs.readFileSync(runFile(id), "utf8"));
+    withSkills({ def: { ...run.def, system: "ORG PROMPT", skills: ["pdf"] }, org: { name: "acme", member: "ba", db: path.join(work, "org.db"), kind: "reply", ticket: "T-1", main: "main" } });
+    frozenPdf("Reads PDFs");
+    fake.agent = stepLimitAgent;
+    handle = await serveAgent(id, { model: new MockLanguageModelV4({ doStream: steps() }) });
+    const { system } = fake.opts.at(-1) as { system: string };
+    expect(system.startsWith("ORG PROMPT\n\nBefore a task that matches")).toBe(true);
+    expect(system).toContain("<name>pdf</name>");
+  });
+
   it("an org session logs session.started and session.ended with input and output tokens on its ticket", async () => {
     setup({ task: "go" });
     const db = path.join(work, "org.db");

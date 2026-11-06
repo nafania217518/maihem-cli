@@ -22,6 +22,8 @@ import { isAlive, logPath, newId, saveState, sockPath } from "./state.ts";
 import type { AgentState } from "./state.ts";
 import { copyIn, copyOut } from "./sync.ts";
 import type { Snapshot } from "./sync.ts";
+import { createSkillTool, freezeSkills, SKILL_TOOL, skillCatalog } from "./skills.ts";
+import type { Skill } from "./skills.ts";
 import { createTools } from "./tools.ts";
 import { ensureWorker } from "./worker.ts";
 
@@ -64,8 +66,10 @@ export function reportCopyOut(r: { written: string[]; conflicts: string[] }, wri
   for (const p of r.conflicts) write(`conflict: ${p} changed on the host and in the sandbox; sandbox copy saved as ${p}.sandbox\n`);
 }
 
-export function buildAgent(def: Definition, provider: Resolved, backend: Backend, model?: LanguageModel, oneShot = false, requireOutput = false, extraTools: ToolSet = {}, stopTools?: string[]): Agent {
-  return createAgent({ model: model ?? createModel(def, provider), system: def.system, tools: { ...createTools(backend, def.tools), ...extraTools }, maxSteps: def.max_steps,
+export function buildAgent(def: Definition, provider: Resolved, backend: Backend, model?: LanguageModel, oneShot = false, requireOutput = false, extraTools: ToolSet = {}, stopTools?: string[], skills: Skill[] = []): Agent {
+  const system = skills.length ? [def.system, skillCatalog(skills)].filter(Boolean).join("\n\n") : def.system;
+  const skillTool: ToolSet = skills.length ? { [SKILL_TOOL]: createSkillTool(skills, def.sandbox) } : {};
+  return createAgent({ model: model ?? createModel(def, provider), system, tools: { ...createTools(backend, def.tools), ...skillTool, ...extraTools }, maxSteps: def.max_steps,
     reasoning: def.reasoning, context: def.context, onContextFull: def.on_context_full, compactAt: def.compact_at, oneShot, requireOutput, stopTools });
 }
 
@@ -80,6 +84,7 @@ function newState(id: string, def: Definition, pid: number): AgentState {
 export function spawnAgent(def: Definition, task: string | undefined, provider: Resolved, mode: "run" | "chat", allowEmpty = false, org?: OrgRef, name?: string): AgentState {
   const id = newId();
   const state = { ...newState(id, def, 0), name: name ?? def.name };
+  freezeSkills(def.skills ?? [], id);
   saveState(state);
   fs.writeFileSync(runFile(id), JSON.stringify({ def, task, provider, mode, allowEmpty, org }), { mode: 0o600 });
   const binPath = fileURLToPath(new URL("../bin/maihem.js", import.meta.url));
@@ -127,10 +132,11 @@ export async function runCommand(args: RunArgs): Promise<number> {
   }
   const id = newId();
   const state = newState(id, def, process.pid);
+  const skills = freezeSkills(def.skills ?? [], id);
   saveState(state);
   console.error(id);
   const { backend, snap } = await openBackend(def, id);
-  const agent = buildAgent(def, provider, backend, undefined, true, !args.allowEmpty);
+  const agent = buildAgent(def, provider, backend, undefined, true, !args.allowEmpty, {}, undefined, skills);
   let exitCode = 0;
   let done: DoneEvent | undefined;
   const live = deps.stdout.isTTY;
