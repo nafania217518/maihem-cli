@@ -160,6 +160,17 @@ describe("agent", () => {
     expect(JSON.stringify(model.doStreamCalls[1].prompt)).toContain("SUMMARY");
     expect(JSON.stringify(model.doStreamCalls[1].prompt)).not.toContain("original-task");
   });
+  // req: 1-add-skills/TR-13
+  it("after compaction the next model request still holds the skill content", async () => {
+    const skillTools = { skill: tool({ description: "skill", inputSchema: z.object({ name: z.string() }), execute: async () => "SKILL-BODY" }) };
+    const skillStep = stream([{ type: "tool-call", toolCallId: "k1", toolName: "skill", input: JSON.stringify({ name: "s" }) }, finish("tool-calls", use(10, 1))]);
+    const model = new MockLanguageModelV4({ ...summary, doStream: [skillStep, toolStepU(80, 5), textStep("ok")] });
+    await createAgent({ model, tools: { ...tools, ...skillTools }, maxSteps: 4, context: 100 }).run(big, () => {});
+    const p = JSON.stringify(model.doStreamCalls[2].prompt);
+    expect(p).toContain("SUMMARY");
+    expect(p).not.toContain("original-task");
+    expect(p).toContain("SKILL-BODY");
+  });
   it("the next turn sends the compacted conversation", async () => {
     const model = new MockLanguageModelV4({ ...summary, doStream: [toolStepU(80, 5), stream([finish("stop", use(10, 1))]), textStep("b")] });
     const agent = createAgent({ model, tools, maxSteps: 3, context: 100 });

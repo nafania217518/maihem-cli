@@ -60,4 +60,54 @@ describe("compact", () => {
     await expect(compact(model, [u("x".repeat(400)), a("y".repeat(400)), u("last")], 10)).rejects.toThrow("overloaded");
     expect(model.doGenerateCalls.length).toBe(1);
   });
+
+  // req: 1-add-skills/TR-13
+  describe("skill results", () => {
+    const sumModel = () => new MockLanguageModelV4({
+      doGenerate: async () => ({ content: [{ type: "text", text: "SUM" }], finishReason: { unified: "stop", raw: "stop" }, usage: { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } }, warnings: [] }),
+    });
+    const summary: ModelMessage = { role: "user", content: "[Summary of earlier conversation]\nSUM" };
+    const call = (id: string, input: object, toolName = "skill") => ({ type: "tool-call" as const, toolCallId: id, toolName, input });
+    const result = (id: string, value: string, toolName = "skill") => ({ type: "tool-result" as const, toolCallId: id, toolName, output: { type: "text" as const, value } });
+    const step = (c: ReturnType<typeof call>, r?: ReturnType<typeof result>): ModelMessage[] =>
+      r ? [{ role: "assistant", content: [c] }, { role: "tool", content: [r] }] : [{ role: "assistant", content: [c] }];
+    const pad = [u("x".repeat(400)), a("y".repeat(400))];
+
+    it("keeps the latest result per skill name after the summary", async () => {
+      const ms = [...step(call("1", { name: "s" }), result("1", "old")), ...step(call("2", { name: "s" }), result("2", "new")), ...pad, u("last")];
+      expect(await compact(sumModel(), ms, 10)).toEqual([
+        summary,
+        { role: "assistant", content: [call("2", { name: "s" })] },
+        { role: "tool", content: [result("2", "new")] },
+        u("last"),
+      ]);
+    });
+
+    it("keeps another file of the same skill in original order", async () => {
+      const ms = [...step(call("1", { name: "s", file: "a.md" }), result("1", "A")), ...step(call("2", { name: "s" }), result("2", "S")), ...pad, u("last")];
+      expect(await compact(sumModel(), ms, 10)).toEqual([
+        summary,
+        { role: "assistant", content: [call("1", { name: "s", file: "a.md" }), call("2", { name: "s" })] },
+        { role: "tool", content: [result("1", "A"), result("2", "S")] },
+        u("last"),
+      ]);
+    });
+
+    it("drops a skill call without a result and ignores other tools", async () => {
+      const ms = [...step(call("1", { name: "s" })), ...step(call("2", { s: "hi" }, "echo"), result("2", "e", "echo")), ...pad, u("last")];
+      expect(await compact(sumModel(), ms, 10)).toEqual([summary, u("last")]);
+    });
+
+    it("skill results survive a second compaction", async () => {
+      const ms = [...step(call("1", { name: "s" }), result("1", "S")), ...pad, u("last")];
+      const once = (await compact(sumModel(), ms, 10))!;
+      const twice = await compact(sumModel(), [...once, a("z".repeat(400)), u("next")], 10);
+      expect(twice).toEqual([
+        summary,
+        { role: "assistant", content: [call("1", { name: "s" })] },
+        { role: "tool", content: [result("1", "S")] },
+        u("next"),
+      ]);
+    });
+  });
 });
