@@ -299,6 +299,34 @@ describe("main", () => {
         expect(err.mock.calls[0][0]).toMatch(/^usage/);
       });
     });
+    // req: 1-add-skills/TR-3
+    describe("ls and inspect", () => {
+      it("ls sorted", async () => {
+        await main(["skill", "add", src("zip", "Packs files\n")]);
+        await main(["skill", "add", src("pdf")]);
+        log.mockClear();
+        expect(await main(["skill", "ls"])).toBe(0);
+        expect(out()).toBe("NAME  DESCRIPTION\npdf   Reads PDFs\nzip   Packs files");
+      });
+      it("ls empty prints only the header", async () => {
+        expect(await main(["skill", "ls"])).toBe(0);
+        expect(out()).toBe("NAME  DESCRIPTION");
+      });
+      it("inspect shows the fields and the files", async () => {
+        const dir = src("pdf");
+        fs.mkdirSync(path.join(dir, "references", "deep"), { recursive: true });
+        fs.writeFileSync(path.join(dir, "references", "deep", "b.md"), "b");
+        fs.writeFileSync(path.join(dir, "a.txt"), "a");
+        await main(["skill", "add", dir]);
+        log.mockClear();
+        expect(await main(["skill", "inspect", "pdf"])).toBe(0);
+        expect(out()).toBe("name: pdf\ndescription: Reads PDFs\nfiles:\n  - SKILL.md\n  - a.txt\n  - references/deep/b.md\n");
+      });
+      it("inspect of an unknown name fails with the add hint", async () => {
+        expect(await main(["skill", "inspect", "nope"])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: nope; add it: maihem skill add PATH");
+      });
+    });
   });
 
   describe("provider", () => {

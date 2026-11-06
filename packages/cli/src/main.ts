@@ -23,7 +23,7 @@ import type { Org } from "./org/types.ts";
 import { VERSION } from "./version.ts";
 import { checkProviders, listProviders, loadProvider, maskProvider, removeProvider, saveProvider } from "./providers.ts";
 import type { Kind, Provider } from "./providers.ts";
-import { addSkill } from "./skills.ts";
+import { addSkill, listSkills, loadSkill, skillFiles } from "./skills.ts";
 
 const USAGE = `usage:
   maihem definition add --name N --provider P --model M [--system S] [--tools a,b] [--no-sandbox] [--max-steps N]
@@ -247,6 +247,11 @@ function skill(argv: string[]): boolean {
   const { positionals: [a] } = parseArgs({ args, options: {}, allowPositionals: true });
   if (sub === "add" && a) {
     console.log(`added ${addSkill(a)}`);
+  } else if (sub === "ls") {
+    for (const l of pad([["NAME", "DESCRIPTION"], ...listSkills().map((s) => [s.name, s.description])])) console.log(l);
+  } else if (sub === "inspect" && a) {
+    const s = loadSkill(a);
+    console.log(YAML.stringify({ name: s.name, description: s.description, files: skillFiles(s) }));
   } else return false;
   return true;
 }

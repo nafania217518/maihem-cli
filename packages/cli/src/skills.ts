@@ -49,3 +49,22 @@ export function addSkill(src: string): string {
   copyFolder(src, skillDir(name));
   return name;
 }
+
+export function loadSkill(name: string): Skill {
+  if (!SKILL_NAME.test(name) || !fs.existsSync(skillDir(name))) throw new Error(`no such skill: ${name}; add it: maihem skill add PATH`);
+  return parseSkill(skillDir(name));
+}
+
+export function listSkills(): Skill[] {
+  const root = path.join(home(), "skills");
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root).filter((n) => !n.startsWith(".")).sort().map(loadSkill);
+}
+
+// Every non-directory entry under the skill folder, relative, with / separators.
+export function skillFiles(skill: Skill): string[] {
+  return (fs.readdirSync(skill.dir, { recursive: true }) as string[])
+    .filter((f) => !fs.lstatSync(path.join(skill.dir, f)).isDirectory())
+    .map((f) => f.split(path.sep).join("/"))
+    .sort();
+}
