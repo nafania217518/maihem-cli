@@ -122,7 +122,7 @@ Format: the caveat line of the armory `core` skill, section Reports
 - The skill tool accepts file: "" and answers that the skill folder is a directory : packages/cli/src/skills.ts
 - The skill catalog joins its <skill> entries with no newline between them : packages/cli/src/skills.ts
 - A missing skill at run start reaches the user as exit code 1 and an error line on stderr; main catches the throw : packages/cli/src/main.ts
-- A state saved with pid 0 always reads "running", because process.kill(0, 0) succeeds on the process group : packages/cli/src/state.ts
+- A state saved with pid 0 would always read "running", because process.kill(0, 0) succeeds on the process group; spawnAgent saves its first state without a pid and adds it after deps.spawn returns : packages/cli/src/run.ts
 - The vitest text coverage report leaves out files at 100%; a module missing from it is fully covered : vitest.config.ts
 - The AI SDK keeps input: null on an invalid tool call, because its non-object fallback treats null as an object : packages/cli/src/compact.ts
 - spawnAgent closes the log fd in a finally block and removes the whole state when deps.spawn throws : packages/cli/src/run.ts
