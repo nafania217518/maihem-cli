@@ -194,6 +194,11 @@ The BR list is in the task item. Each test that proves a TR carries `// req: 1-a
 - TR-17 (BR-9): MUST make `compact` tolerate a `skill` tool call whose `input` is `null` (the AI SDK keeps it on an invalid call): read `name`/`file` from `p.input ?? {}`, so compaction still returns the summary. (Defect found in the final review of TR-13.)
   - tests: `compact.test.ts`: a skill call with `input: null` and a result does not break compaction
 
+- TR-18 (BR-3): MUST make `skill update` roll back when the rename of `.NAME.new` to NAME fails: rename `.NAME.old` back to NAME and rethrow, so the old copy stays registered. (Amendment approved at the recorded-items quiz.)
+  - tests: `skills.test.ts`: a failed final rename in update keeps the old copy registered
+- TR-19 (BR-10): MUST make `spawnAgent` leave no state file and no `agents/<id>.skills` folder when `deps.spawn` throws: call `removeState` and rethrow. (Amendment approved at the recorded-items quiz.)
+  - tests: `run.test.ts`: a spawn that throws leaves no state and no frozen skills folder
+
 ## Test scope
 
 No existing case breaks, reworks or is removed. Three close calls:
