@@ -8,7 +8,7 @@ import { home } from "./registry.ts";
 export interface AgentState {
   id: string;
   name: string;
-  pid: number;
+  pid?: number;
   status: "running" | "exited";
   workdir: string;
   sandbox: boolean;
@@ -54,7 +54,8 @@ export function listStates(): AgentState[] {
     .sort((a, b) => b.started.localeCompare(a.started));
 }
 
-export function isAlive(pid: number): boolean {
+export function isAlive(pid: number | undefined): boolean {
+  if (pid === undefined) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -64,7 +65,7 @@ export function isAlive(pid: number): boolean {
 }
 
 export function refresh(s: AgentState): AgentState {
-  if (s.status === "running" && !isAlive(s.pid)) {
+  if (s.status === "running" && s.pid !== undefined && !isAlive(s.pid)) {
     s.status = "exited";
     saveState(s);
   }
@@ -72,6 +73,6 @@ export function refresh(s: AgentState): AgentState {
 }
 
 export function removeState(s: AgentState): void {
-  if (fs.existsSync(dir())) for (const f of fs.readdirSync(dir())) if (f.startsWith(`${s.id}.`)) fs.rmSync(path.join(dir(), f), { force: true });
+  if (fs.existsSync(dir())) for (const f of fs.readdirSync(dir())) if (f.startsWith(`${s.id}.`)) fs.rmSync(path.join(dir(), f), { recursive: true, force: true });
   fs.rmSync(s.sock, { force: true });
 }

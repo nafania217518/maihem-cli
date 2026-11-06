@@ -79,6 +79,8 @@ Project-only rules. The armory skills hold the rest.
 Format: `Term : one-line meaning`, plus `. Avoid: <synonyms>` when a synonym was rejected.
 A line MUST hold only a term of the project's domain, with no implementation detail.
 
+- Skill : a folder of instructions, scripts and reference files that an agent loads on demand
+
 ## Caveats
 
 Format: the caveat line of the armory `core` skill, section Reports
@@ -104,3 +106,30 @@ Format: the caveat line of the armory `core` skill, section Reports
 - The git remote is named upstream, not origin; armory `<base>` falls back to the local master : —
 - The sub-issue and blocked-by tracker bindings were not tried on a live item; the repo had no issues at setup : AGENTS.md
 - Coverage thresholds apply per file (perFile), so each module must reach 90% on its own : vitest.config.ts
+- Skills are frozen per agent at start into ~/.maihem/agents/<id>.skills/; skill update and rm never touch a running agent : packages/cli/src/skills.ts
+- The skill tool reads files on the host, also in sandbox mode; skill scripts run only in host mode : packages/cli/src/skills.ts
+- Skill folders are copied with verbatimSymlinks, because Node's default rewrites relative symlinks to absolute paths into the source folder : packages/cli/src/skills.ts
+- The skill catalog is appended in buildAgent, so org sessions get it although the org replaces def.system : packages/cli/src/run.ts
+- Compaction re-inserts the latest result of each skill call after the summary, so a large skill can keep the context above compact_at : packages/cli/src/compact.ts
+- definition update fails while a listed skill is missing (as for a missing provider), even when the update does not touch skills : packages/cli/src/main.ts
+- An empty front matter block parses to null under yaml 2.9.1; skills.ts reads it as no fields : packages/cli/src/skills.ts
+- skill rm -f during an org run stops the org daemon at the next session spawn; org/daemon.ts spawn has no catch : packages/cli/src/org/daemon.ts
+- loadSkill checks the name against SKILL_NAME before it touches the disk, so skill inspect ../x reports "no such skill" instead of reading outside the registry : packages/cli/src/skills.ts
+- skill add and skill update copy through the hidden sibling folder .NAME.new (update also .NAME.old), and skill ls skips dot-folders : packages/cli/src/skills.ts
+- A fresh worktree needs the ignored, generated packages/worker/worker-configuration.d.ts before the lint gate passes : packages/worker/tsconfig.json
+- One registered SKILL.md that fails to parse makes skill ls fail, along with skill rm and skill update for that skill; only a manual delete clears it : packages/cli/src/skills.ts
+- The TR-15 tests make a copy fail with a chmod 000 file, so they fail when the tests run as root : packages/cli/test/skills.test.ts
+- The skill tool accepts file: "" and answers that the skill folder is a directory : packages/cli/src/skills.ts
+- The skill catalog joins its <skill> entries with no newline between them : packages/cli/src/skills.ts
+- A missing skill at run start reaches the user as exit code 1 and an error line on stderr; main catches the throw : packages/cli/src/main.ts
+- A state saved with pid 0 would always read "running", because process.kill(0, 0) succeeds on the process group; spawnAgent saves its first state without a pid and adds it after deps.spawn returns : packages/cli/src/run.ts
+- The vitest text coverage report leaves out files at 100%; a module missing from it is fully covered : vitest.config.ts
+- The AI SDK keeps input: null on an invalid tool call, because its non-object fallback treats null as an object : packages/cli/src/compact.ts
+- spawnAgent closes the log fd in a finally block and removes the whole state when deps.spawn throws : packages/cli/src/run.ts
+- Node spawn reports ENOENT, EACCES, EAGAIN and EMFILE through a later error event, so the spawnAgent catch covers only rare spawn errors that throw at once : packages/cli/src/run.ts
+- When the update rollback rename also fails, the skill stays only at the hidden .NAME.old, and ls and update no longer see it : packages/cli/src/skills.ts
+- spawnAgent saves the running state with pid undefined when the spawn fails later through the error event : packages/cli/src/run.ts
+- Node defers spawn errors to process.nextTick with child.pid undefined; spawnAgent relies on this to save the running state first : packages/cli/src/run.ts
+- A spawn failure in an org backs off like a transient session.failed and also counts toward the park cap; the park message names the spawn error : packages/cli/src/org/daemon.ts
+- AgentState.pid is optional, because a failed spawn saves no pid; stop treats a falsy pid (also 0) as not running, and the org-daemon stop sends no signal without a pid : packages/cli/src/main.ts
+- refresh leaves a running state without a pid alone, so a parent SIGKILLed between the first save and the spawn leaves a state that reads running until removed by hand : packages/cli/src/state.ts

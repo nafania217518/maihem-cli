@@ -5,6 +5,7 @@ export const TOOLS = ["read", "write", "edit", "list", "exec"] as const;
 export type Tool = (typeof TOOLS)[number];
 export const REASONING = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type Reasoning = (typeof REASONING)[number];
+export const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export interface Definition {
   name: string;
   provider: string;
@@ -20,6 +21,7 @@ export interface Definition {
   on_context_full: "compact" | "fail";
   compact_at: number;
   sandbox_exclude?: string[];
+  skills?: string[];
 }
 
 export function splitTools(s: string): string[] {
@@ -47,6 +49,10 @@ export function validate(raw: Record<string, unknown>): Definition {
   const ex = raw.sandbox_exclude;
   if (ex !== undefined && (!Array.isArray(ex) || ex.some((p) => typeof p !== "string" || !p))) throw new Error("definition: sandbox_exclude must be a list of paths");
   if (raw.description !== undefined && (typeof raw.description !== "string" || !raw.description)) throw new Error("definition: description must be text");
+  const skills = raw.skills;
+  if (skills !== undefined && (!Array.isArray(skills) || skills.some((n) => typeof n !== "string" || !SKILL_NAME.test(n)))) throw new Error("definition: skills must be a list of skill names");
+  const dup = (skills as string[] | undefined)?.find((n, i, all) => all.indexOf(n) !== i);
+  if (dup) throw new Error(`definition: duplicate skill "${dup}"`);
   const d: Definition = {
     name: raw.name as string,
     provider: raw.provider as string,
@@ -62,10 +68,11 @@ export function validate(raw: Record<string, unknown>): Definition {
   if (ex !== undefined) d.sandbox_exclude = ex as string[];
   if (typeof raw.system === "string") d.system = raw.system;
   if (raw.description !== undefined) d.description = raw.description as string;
+  if (skills !== undefined) d.skills = skills as string[];
   return d;
 }
 
-export const FIELDS = ["name", "provider", "model", "system", "description", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude"];
+export const FIELDS = ["name", "provider", "model", "system", "description", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude", "skills"];
 export const isMap = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null && !Array.isArray(x);
 
 // Checks an apply-file section: a map of name: settings, known fields only.

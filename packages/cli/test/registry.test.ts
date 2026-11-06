@@ -43,6 +43,11 @@ describe("registry", () => {
     expect(() => checkDefinitions({ x: { provider: "p", model: "m", workdir: "/w" } })).toThrow('apply file: unknown field "workdir" in definition "x"');
   });
 
+  // req: 1-add-skills/TR-5
+  it("checkDefinitions accepts skills", () => {
+    expect(checkDefinitions({ a: { provider: "p", model: "m", skills: ["pdf"] } })[0].skills).toEqual(["pdf"]);
+  });
+
   it("checkDefinitions reads a map keyed by name, rejects unknown fields, and keeps the base_url hint", () => {
     expect(checkDefinitions({ a: { provider: "p", model: "m", max_steps: 3 }, b: { provider: "p", model: "m" } }).map((d) => [d.name, d.max_steps])).toEqual([["a", 3], ["b", 50]]);
     expect(() => checkDefinitions({ a: { provider: "p", model: "m", foo: 1 } })).toThrow('apply file: unknown field "foo" in definition "a"');

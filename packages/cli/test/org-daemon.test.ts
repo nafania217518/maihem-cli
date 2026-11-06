@@ -15,6 +15,7 @@ import { openTracker } from "../src/org/tracker.ts";
 import type { Tracker } from "../src/org/tracker.ts";
 import { dbFile, defaultDeps, transient, expandRepo, loadRunnable, orgDir, orgPid, pidFile, runOrg, runOrgMain } from "../src/org/daemon.ts";
 import type { OrgDeps } from "../src/org/daemon.ts";
+import { logPath, saveState, sockPath } from "../src/state.ts";
 import type { InboxItem, Org, Wake } from "../src/org/types.ts";
 
 let home: string, repo: string, n: number, u: Tracker | undefined;
@@ -28,7 +29,7 @@ const org = (limits: Partial<Org["limits"]> = {}, extra: Record<string, object> 
 
 // a fake session: acts through ops as the member on the same db and writes files into its worktree (def.workdir)
 interface Ctx { t: Tracker; ops: Ops; member: string; ticket: string; kind: Wake["kind"]; task: string; wt: string; id: string }
-type Agent = (c: Ctx) => void | "fail" | 429; // "fail" or 429: the session logs session.failed
+type Agent = (c: Ctx) => void | "fail" | 429 | "nospawn"; // "fail" or 429: the session logs session.failed; "nospawn": its process never started
 interface Spawn { at: number; id: string; member: string; ticket: string; kind: Wake["kind"]; batch?: string[]; task: string; system: string; tools: string[]; reasoning?: string; wt: string; branch: string; head: string; status: string }
 function fake(script: Record<string, Agent>, o: Partial<OrgDeps> = {}) {
   const spawned: Spawn[] = [], stopped: string[] = [];
@@ -43,7 +44,8 @@ function fake(script: Record<string, Agent>, o: Partial<OrgDeps> = {}) {
       spawned.push({ at: Date.now(), id, member, ticket, kind, batch, task, system: d.system!, tools: d.tools, reasoning: d.reasoning, wt: w, branch: git(w, "branch", "--show-current"), head: git(w, "log", "-1", "--format=%an <%ae>|%s"), status: ticket ? t.getTicket(ticket).status : "" });
       t.log("session.started", member, { member, id }, ticket);
       const r = script[member]?.({ t, ops: createOps(t, og), member, ticket, kind, task, wt: w, id });
-      if (r === "fail" || r === 429) t.log("session.failed", member, { member, id, error: "boom", ...(r === 429 && { status: 429 }) }, ticket);
+      if (r === "nospawn") saveState({ id, name: member, status: "exited", exitCode: 1, detail: "spawn failed: spawn ENOENT", workdir: w, sandbox: false, started: new Date().toISOString(), log: logPath(id), sock: sockPath(id) });
+      else if (r === "fail" || r === 429) t.log("session.failed", member, { member, id, error: "boom", ...(r === 429 && { status: 429 }) }, ticket);
       else t.log("session.ended", member, { member, id, tokens: 10, input: 7, output: 3, text: `last words of ${id}` }, ticket);
       t.close();
       return id;
@@ -568,6 +570,21 @@ describe("org runner", () => {
     expect([t[1] - t[0], t[2] - t[1], t[3] - t[2]].map((d, i) => d >= 10 * 2 ** i)).toEqual([true, true, true]);
   });
 
+  // req: 1-add-skills/TR-21
+  it("a session that failed to spawn backs off like a transient failure", async () => {
+    const f = fake({ ba: () => "nospawn" }, { retryMs: 150 });
+    await until(f, () => f.spawned.filter((x) => x.member === "ba").length >= 3);
+    const t = f.spawned.filter((x) => x.member === "ba").map((x) => x.at);
+    expect([t[1] - t[0], t[2] - t[1]].map((d, i) => d >= 150 * 2 ** i)).toEqual([true, true]);
+  });
+
+  // req: 1-add-skills/TR-21
+  it("three failed spawns park the ticket with the spawn error", async () => {
+    const f = fake({ ba: () => "nospawn" }, { retryMs: 1 });
+    await until(f, (t) => t.getTicket("T-2").status === "needs_reply");
+    expect(db().getTicket("T-2").comments.at(-1)!.text).toBe("ba ended 3 sessions on T-2 without a transition. The last session's final text: spawn failed: spawn ENOENT");
+  });
+
   it("an idle org waits for the human answer", async () => {
     let waited = false;
     const f = fake({ ba: () => {} });
@@ -619,7 +636,7 @@ describe("org runner", () => {
 describe("org runner deps", () => {
   it("defaultDeps spawn passes the org ref with the session kind; alive and stop use the agent state", () => {
     saveProvider({ name: "p", kind: "ollama" } as never);
-    const spawn = vi.spyOn(run.deps, "spawn").mockReturnValue({ pid: 4242, unref() {} } as never);
+    const spawn = vi.spyOn(run.deps, "spawn").mockReturnValue({ pid: 4242, unref() {}, on() {} } as never);
     const id = defaultDeps.spawn({ org: org(), member: "pm", def: def("dpm"), task: "t", db: "/db", ticket: "", kind: "triage", batch: ["T-2"], main: "main" });
     expect(JSON.parse(fs.readFileSync(run.runFile(id), "utf8"))).toMatchObject({ org: { name: "acme", member: "pm", db: "/db", ticket: "", main: "main", kind: "triage", batch: ["T-2"] }, def: { sandbox: false } });
     expect(spawn).toHaveBeenCalled();
@@ -647,6 +664,15 @@ describe("org daemon helpers", () => {
     expect(() => loadRunnable("gone")).toThrow(`org "gone": repo ${path.join(work, "nope")} does not exist`);
   });
 
+  // req: 1-add-skills/TR-8
+  it("loadRunnable refuses a member definition whose skill is missing", () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "wd-"));
+    const members = Object.fromEntries(["ba", "sa", "pm", "tl", "dev"].map((r) => [r, { role: r, definition: "d2" }]));
+    saveOrg(validateOrg({ name: "skilled", repo: work, members }));
+    saveDefinition(parseDefinition(JSON.stringify({ name: "d2", provider: "p", model: "m", skills: ["gone"] })));
+    expect(() => loadRunnable("skilled")).toThrow("no such skill: gone; add it: maihem skill add PATH");
+  });
+
   it("expandRepo expands ~ and orgPid reads a live pid", () => {
     expect(expandRepo("~/r")).toBe(path.join(os.homedir(), "r"));
     expect(orgPid("acme")).toBeUndefined();
@@ -657,7 +683,7 @@ describe("org daemon helpers", () => {
 
   it("runOrgMain runs the org from start.json, stops on SIGTERM and removes org.pid", async () => {
     saveProvider({ name: "p", kind: "ollama" } as never);
-    vi.spyOn(run.deps, "spawn").mockReturnValue({ pid: 4242, unref() {} } as never);
+    vi.spyOn(run.deps, "spawn").mockReturnValue({ pid: 4242, unref() {}, on() {} } as never);
     fs.mkdirSync(orgDir("acme"), { recursive: true });
     fs.writeFileSync(path.join(orgDir("acme"), "start.json"), JSON.stringify({ goal: "g" }));
     fs.writeFileSync(pidFile("acme"), "1");

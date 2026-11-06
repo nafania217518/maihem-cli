@@ -14,6 +14,7 @@ import { createOrgTools, stopTools } from "./org/tools.ts";
 import { openTracker } from "./org/tracker.ts";
 import { buildAgent, openBackend, printEvent, reportCopyOut, runFile } from "./run.ts";
 import type { OrgRef } from "./run.ts";
+import { frozenSkills } from "./skills.ts";
 import { eventsPath, loadState, saveState } from "./state.ts";
 import { copyOut } from "./sync.ts";
 
@@ -41,7 +42,7 @@ export async function serveAgent(id: string, opts: { model?: LanguageModel } = {
       dirty: async () => dirtyFiles(def.workdir!), discard: async () => void discard(def.workdir!),
       milestoneDiff: (tags, p) => milestoneDiff(expandRepo(o.repo), org.main, tags, p),
       ...(org.kind === "work" && { merge }) }) : {};
-  const agent = buildAgent(def, provider, backend, opts.model, readonly, readonly && !allowEmpty, orgTools, org && stopTools(org.kind));
+  const agent = buildAgent(def, provider, backend, opts.model, readonly, readonly && !allowEmpty, orgTools, org && stopTools(org.kind), frozenSkills(id, def.skills ?? []));
   if (org && tracker) tracker.log("session.started", org.member, { member: org.member, id, kind: org.kind }, org.ticket);
   const clients = new Set<net.Socket>();
   let busy = false;

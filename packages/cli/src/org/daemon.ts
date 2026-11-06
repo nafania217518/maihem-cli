@@ -9,6 +9,7 @@ import type { Definition } from "../definition.ts";
 import { resolveProvider } from "../providers.ts";
 import { home, loadDefinition } from "../registry.ts";
 import { spawnAgent } from "../run.ts";
+import { loadSkill } from "../skills.ts";
 import { isAlive, loadState } from "../state.ts";
 import { createBus, execute } from "./bus.ts";
 import type { Io, View } from "./bus.ts";
@@ -52,6 +53,7 @@ export function loadRunnable(name: string): { org: Org; defs: Record<string, Def
   if (!fs.existsSync(org.repo)) throw new Error(`org "${name}": repo ${org.repo} does not exist`);
   const defs = Object.fromEntries(Object.values(org.members).map(({ definition: d }) => [d, loadDefinition(d)]));
   crossCheck(org, (d) => d in defs);
+  for (const d of Object.values(defs)) for (const s of d.skills ?? []) loadSkill(s);
   return { org, defs };
 }
 
@@ -59,7 +61,7 @@ export const defaultDeps: OrgDeps = {
   spawn: ({ org, member, def, task, db, ticket, kind, batch, main }) =>
     spawnAgent({ ...def, sandbox: false }, task, resolveProvider(def.provider), "run", true, { name: org.name, member, db, ticket, main, kind, batch }, `${org.name}/${member}`).id,
   alive: (id) => { const s = loadState(id); return s.status === "running" && isAlive(s.pid); },
-  stop: (id) => { try { process.kill(loadState(id).pid, "SIGTERM"); } catch { /* already gone */ } },
+  stop: (id) => { try { const { pid } = loadState(id); if (pid !== undefined) process.kill(pid, "SIGTERM"); } catch { /* already gone */ } },
   pollMs: 1000,
 };
 
@@ -67,6 +69,11 @@ export const defaultDeps: OrgDeps = {
 export const transient = (d: OrgEvent["data"]): boolean => {
   const st = Number(d.status), err = String(d.error ?? "");
   return st === 429 || st >= 500 || (st >= 200 && st < 300) || err.startsWith("empty answer") || err.startsWith("stream cut") || (!d.status && /fetch failed|ECONNREFUSED|ETIMEDOUT|socket/i.test(err));
+};
+// the detail of a session whose process never started; it logs no session event
+const spawnError = (id: string): string | undefined => {
+  const st = loadState(id);
+  return st.status === "exited" && st.detail?.startsWith("spawn failed:") ? st.detail : undefined;
 };
 // slot order (status-workflow.md §5)
 const SLOT: Partial<Record<Status, number>> = { needs_reply: 0, in_review: 1, in_progress: 2, todo: 3, triage: 4 };
@@ -207,12 +214,13 @@ export async function runOrg(name: string, goal: string, deps: OrgDeps, signal?:
     delete sessions[m];
     const e = outcome.get(s.id);
     outcome.delete(s.id);
-    if (e?.kind === "session.failed" && transient(e.data)) {
+    const failedSpawn = e ? undefined : spawnError(s.id);
+    if (failedSpawn || (e?.kind === "session.failed" && transient(e.data))) {
       const b = backoff[s.ticket] ?? { until: 0, n: 0 };
       backoff[s.ticket] = { until: Date.now() + Math.min(retryMs * 2 ** b.n, maxBackoff), n: b.n + 1 };
-      return;
-    }
-    delete backoff[s.ticket];
+      // a spawn error does not heal by itself, so it still counts toward parking the ticket
+      if (!failedSpawn) return;
+    } else delete backoff[s.ticket];
     // a no-op: no transition on its ticket since the session started; a triage session, for each batch ticket left in Triage
     const evs = t.events(s.since).filter((x) => transition(x) || (x.kind === "approval.set" && x.actor === m));
     const left = s.kind === "triage" ? (s.batch ?? []).filter((x) => t.getTicket(x).status === "triage") : evs.some((x) => x.ticket === s.ticket) ? [] : [s.ticket];
@@ -220,7 +228,7 @@ export async function runOrg(name: string, goal: string, deps: OrgDeps, signal?:
       const k = `${m} ${id}`, n = noops[k] = (noops[k] ?? 0) + 1;
       if (n < noopCap || !isOpen(t.getTicket(id).status)) continue;
       delete noops[k];
-      const text = e?.data.text ? String(e.data.text) : "(none)";
+      const text = e?.data.text ? String(e.data.text) : failedSpawn ?? "(none)";
       try { ops.parkForHuman(id, `${m} ended ${n} sessions on ${id} without a transition. The last session's final text: ${text}`); }
       catch { /* it already waits for the human */ }
     }

@@ -23,10 +23,11 @@ import type { Org } from "./org/types.ts";
 import { VERSION } from "./version.ts";
 import { checkProviders, listProviders, loadProvider, maskProvider, removeProvider, saveProvider } from "./providers.ts";
 import type { Kind, Provider } from "./providers.ts";
+import { addSkill, listSkills, loadSkill, removeSkill, skillFiles, updateSkill } from "./skills.ts";
 
 const USAGE = `usage:
   maihem definition add --name N --provider P --model M [--system S] [--tools a,b] [--no-sandbox] [--max-steps N]
-      [--reasoning LEVEL] [--context N] [--on-context-full compact|fail] [--compact-at X] [--sandbox-exclude a,b] [--description TEXT]
+      [--reasoning LEVEL] [--context N] [--on-context-full compact|fail] [--compact-at X] [--sandbox-exclude a,b] [--description TEXT] [--skills a,b]
   maihem definition update NAME [same flags except --name] [--unset FIELD]...
   maihem definition rm NAME
   maihem definition ls
@@ -57,6 +58,11 @@ const USAGE = `usage:
   maihem provider rm [-f] NAME
   maihem provider ls
   maihem provider inspect NAME
+  maihem skill add PATH
+  maihem skill update NAME PATH
+  maihem skill rm [-f] NAME
+  maihem skill ls
+  maihem skill inspect NAME
   maihem stop [--discard] ID
   maihem attach ID
   maihem logs ID
@@ -94,14 +100,15 @@ const sendStop = (sock: string, apply: boolean): Promise<boolean> => new Promise
 
 async function stop(id: string, discard: boolean): Promise<void> {
   const s = loadState(id);
-  if (!(await sendStop(s.sock, !discard))) {
+  // a process that failed to start has no pid; pid 0 would signal the whole process group
+  if (s.pid && !(await sendStop(s.sock, !discard))) {
     try {
       process.kill(s.pid, "SIGTERM");
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
     }
   }
-  for (let i = 0; i < 50 && isAlive(s.pid); i++) await sleep(100);
+  for (let i = 0; s.pid && i < 50 && isAlive(s.pid); i++) await sleep(100);
   s.status = "exited";
   saveState(s);
   fs.rmSync(runFile(id), { force: true });
@@ -123,6 +130,7 @@ const fileArg = (args: string[]): string | undefined => parseArgs({ args, option
 function applyAll(file: string, ps: Provider[], ds: Definition[], os: Org[]): void {
   const given = new Set(ps.map((p) => p.name));
   for (const d of ds) if (!given.has(d.provider)) loadProvider(d.provider);
+  for (const d of ds) for (const s of d.skills ?? []) loadSkill(s);
   const oldP = new Set(listProviders().map((p) => p.name));
   const oldD = new Set(listDefinitions().map((d) => d.name));
   const oldO = new Set(listOrgs().map((o) => o.name));
@@ -153,9 +161,9 @@ const DEF_OPTIONS = {
   name: { type: "string" }, provider: { type: "string" }, model: { type: "string" }, system: { type: "string" }, tools: { type: "string" },
   "no-sandbox": { type: "boolean" }, "max-steps": { type: "string" }, reasoning: { type: "string" }, context: { type: "string" },
   "on-context-full": { type: "string" }, "compact-at": { type: "string" }, unset: { type: "string", multiple: true },
-  "sandbox-exclude": { type: "string" }, description: { type: "string" },
+  "sandbox-exclude": { type: "string" }, description: { type: "string" }, skills: { type: "string" },
 } as const;
-const DEF_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude", "description"];
+const DEF_UNSET = ["system", "tools", "sandbox", "max_steps", "reasoning", "context", "on_context_full", "compact_at", "sandbox_exclude", "description", "skills"];
 
 function definition(argv: string[]): boolean {
   const [sub, ...args] = argv;
@@ -166,6 +174,7 @@ function definition(argv: string[]): boolean {
     if (v["on-context-full"] !== undefined) raw.on_context_full = v["on-context-full"];
     if (v.tools !== undefined) raw.tools = splitTools(v.tools);
     if (v["sandbox-exclude"] !== undefined) raw.sandbox_exclude = splitTools(v["sandbox-exclude"]);
+    if (v.skills !== undefined) raw.skills = splitTools(v.skills);
     if (v["no-sandbox"]) raw.sandbox = false;
     if (v.context !== undefined) raw.context = v.context;
     for (const [f, k] of [["max-steps", "max_steps"], ["compact-at", "compact_at"]] as const) if (v[f] !== undefined) raw[k] = Number(v[f]);
@@ -175,6 +184,7 @@ function definition(argv: string[]): boolean {
     }
     const d = validate(raw);
     loadProvider(d.provider);
+    for (const s of d.skills ?? []) loadSkill(s);
     saveDefinition(d);
   };
   if (sub === "add") {
@@ -236,6 +246,29 @@ function provider(argv: string[]): boolean {
   return true;
 }
 
+function skill(argv: string[]): boolean {
+  const [sub, ...args] = argv;
+  const { values: v, positionals: [a, b] } = parseArgs({ args, options: { force: { type: "boolean", short: "f" } }, allowPositionals: true });
+  if (sub === "add" && a) {
+    console.log(`added ${addSkill(a)}`);
+  } else if (sub === "update" && a && b) {
+    updateSkill(a, b);
+    console.log(`updated ${a}`);
+  } else if (sub === "rm" && a) {
+    loadSkill(a);
+    const users = listDefinitions().filter((d) => d.skills?.includes(a)).map((d) => d.name);
+    if (users.length && !v.force) throw new Error(`skill "${a}" is used by definitions: ${users.join(", ")}; use -f to remove it anyway`);
+    removeSkill(a);
+    console.log(`removed ${a}`);
+  } else if (sub === "ls") {
+    for (const l of pad([["NAME", "DESCRIPTION"], ...listSkills().map((s) => [s.name, s.description])])) console.log(l);
+  } else if (sub === "inspect" && a) {
+    const s = loadSkill(a);
+    console.log(YAML.stringify({ name: s.name, description: s.description, files: skillFiles(s) }));
+  } else return false;
+  return true;
+}
+
 async function prune(force: boolean): Promise<void> {
   const dead = listStates().map(refresh).filter((s) => s.status === "exited");
   if (!dead.length) return console.log("nothing to prune");
@@ -288,6 +321,9 @@ export async function main(argv: string[]): Promise<number> {
       }
       case "provider":
         if (!provider(rest)) break;
+        return 0;
+      case "skill":
+        if (!skill(rest)) break;
         return 0;
       case "launch":
         return await launchCommand(resolveRunArgs(rest, "launch"));

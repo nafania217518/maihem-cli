@@ -253,6 +253,182 @@ describe("main", () => {
     expect(err.mock.calls[0][0]).not.toMatch(/maihem (build|images?|inspect|rmi)\b/);
     expect(loadDefinition("a").name).toBe("a");
   });
+  describe("skill", () => {
+    const src = (name: string, text = "---\ndescription: Reads PDFs\n---\nbody\n"): string => {
+      const dir = path.join(home, "src", name);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "SKILL.md"), text);
+      return dir;
+    };
+    const reg = (...p: string[]) => path.join(home, "skills", ...p);
+    // req: 1-add-skills/TR-2
+    describe("add", () => {
+      it("add copies the folder with its subfolders under the resolved name", async () => {
+        const dir = src("folder", "---\nname: pdf\ndescription: d\n---\nb\n");
+        fs.mkdirSync(path.join(dir, "scripts"));
+        fs.writeFileSync(path.join(dir, "scripts", "run.sh"), "echo hi");
+        expect(await main(["skill", "add", dir])).toBe(0);
+        expect(out()).toBe("added pdf");
+        expect(fs.readFileSync(reg("pdf", "scripts", "run.sh"), "utf8")).toBe("echo hi");
+        expect(fs.existsSync(reg("pdf", "SKILL.md"))).toBe(true);
+      });
+      it("an existing name is refused with the update hint", async () => {
+        await main(["skill", "add", src("pdf")]);
+        expect(await main(["skill", "add", src("pdf")])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe('error: skill "pdf" already exists; use maihem skill update pdf PATH');
+      });
+      it("a folder without SKILL.md fails and copies nothing", async () => {
+        const dir = path.join(home, "empty");
+        fs.mkdirSync(dir);
+        expect(await main(["skill", "add", dir])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe(`error: skill: no SKILL.md in ${dir}`);
+        expect(fs.existsSync(reg())).toBe(false);
+      });
+      it("a relative symlink inside the folder stays relative", async () => {
+        const dir = src("pdf");
+        fs.symlinkSync("SKILL.md", path.join(dir, "link.md"));
+        await main(["skill", "add", dir]);
+        expect(fs.readlinkSync(reg("pdf", "link.md"))).toBe("SKILL.md");
+      });
+      it("usage lists the subcommands", async () => {
+        expect(await main(["skill"])).toBe(1);
+        for (const s of ["skill add PATH", "skill update NAME PATH", "skill rm [-f] NAME", "skill ls", "skill inspect NAME"]) expect(err.mock.calls[0][0]).toContain(`maihem ${s}`);
+      });
+      it("add without PATH prints the usage", async () => {
+        expect(await main(["skill", "add"])).toBe(1);
+        expect(err.mock.calls[0][0]).toMatch(/^usage/);
+      });
+    });
+    // req: 1-add-skills/TR-3
+    describe("ls and inspect", () => {
+      it("ls sorted", async () => {
+        await main(["skill", "add", src("zip", "Packs files\n")]);
+        await main(["skill", "add", src("pdf")]);
+        log.mockClear();
+        expect(await main(["skill", "ls"])).toBe(0);
+        expect(out()).toBe("NAME  DESCRIPTION\npdf   Reads PDFs\nzip   Packs files");
+      });
+      it("ls empty prints only the header", async () => {
+        expect(await main(["skill", "ls"])).toBe(0);
+        expect(out()).toBe("NAME  DESCRIPTION");
+      });
+      it("inspect shows the fields and the files", async () => {
+        const dir = src("pdf");
+        fs.mkdirSync(path.join(dir, "references", "deep"), { recursive: true });
+        fs.writeFileSync(path.join(dir, "references", "deep", "b.md"), "b");
+        fs.writeFileSync(path.join(dir, "a.txt"), "a");
+        await main(["skill", "add", dir]);
+        log.mockClear();
+        expect(await main(["skill", "inspect", "pdf"])).toBe(0);
+        expect(out()).toBe("name: pdf\ndescription: Reads PDFs\nfiles:\n  - SKILL.md\n  - a.txt\n  - references/deep/b.md\n");
+      });
+      it("inspect of an unknown name fails with the add hint", async () => {
+        expect(await main(["skill", "inspect", "nope"])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: nope; add it: maihem skill add PATH");
+      });
+    });
+    // req: 1-add-skills/TR-4
+    describe("update", () => {
+      it("update replaces the copy and drops removed files", async () => {
+        const v1 = src("pdf");
+        fs.writeFileSync(path.join(v1, "old.txt"), "old");
+        await main(["skill", "add", v1]);
+        const v2 = src("v2", "---\nname: pdf\ndescription: New\n---\nb\n");
+        fs.writeFileSync(path.join(v2, "new.txt"), "new");
+        log.mockClear();
+        expect(await main(["skill", "update", "pdf", v2])).toBe(0);
+        expect(out()).toBe("updated pdf");
+        expect(fs.readdirSync(reg("pdf")).sort()).toEqual(["SKILL.md", "new.txt"]);
+        expect(fs.readdirSync(reg())).toEqual(["pdf"]);
+      });
+      it("a different name is refused", async () => {
+        await main(["skill", "add", src("pdf")]);
+        const other = src("zip");
+        expect(await main(["skill", "update", "pdf", other])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe(`error: skill update: ${other} holds skill "zip", not "pdf"`);
+      });
+      it("an unknown name fails", async () => {
+        expect(await main(["skill", "update", "pdf", src("pdf")])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: pdf; add it: maihem skill add PATH");
+      });
+      it("a refused update keeps the old copy", async () => {
+        await main(["skill", "add", src("pdf")]);
+        const bad = src("bad", "---\nname: pdf\n");
+        expect(await main(["skill", "update", "pdf", bad])).toBe(1);
+        expect(fs.readFileSync(reg("pdf", "SKILL.md"), "utf8")).toBe("---\ndescription: Reads PDFs\n---\nbody\n");
+        expect(fs.readdirSync(reg())).toEqual(["pdf"]);
+      });
+    });
+    // req: 1-add-skills/TR-6
+    describe("rm", () => {
+      it("refused while used, and -f forces", async () => {
+        saveProvider({ name: "op", kind: "openai" });
+        await main(["skill", "add", src("pdf")]);
+        for (const n of ["b", "a"]) await main(["definition", "add", "--name", n, "--provider", "op", "--model", "m", "--skills", "pdf"]);
+        expect(await main(["skill", "rm", "pdf"])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe('error: skill "pdf" is used by definitions: a, b; use -f to remove it anyway');
+        expect(fs.existsSync(reg("pdf"))).toBe(true);
+        log.mockClear();
+        expect(await main(["skill", "rm", "-f", "pdf"])).toBe(0);
+        expect(out()).toBe("removed pdf");
+        expect(fs.existsSync(reg("pdf"))).toBe(false);
+      });
+      it("an unused skill is removed", async () => {
+        await main(["skill", "add", src("pdf")]);
+        log.mockClear();
+        expect(await main(["skill", "rm", "pdf"])).toBe(0);
+        expect(out()).toBe("removed pdf");
+        expect(fs.existsSync(reg("pdf"))).toBe(false);
+      });
+      it("an unknown name fails", async () => {
+        expect(await main(["skill", "rm", "nope"])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: nope; add it: maihem skill add PATH");
+      });
+    });
+    // req: 1-add-skills/TR-5
+    describe("definition skills", () => {
+      beforeEach(async () => {
+        saveProvider({ name: "op", kind: "openai" });
+        await main(["skill", "add", src("pdf")]);
+        await main(["skill", "add", src("zip")]);
+        log.mockClear();
+      });
+      const add = (...a: string[]) => main(["definition", "add", "--name", "a", "--provider", "op", "--model", "m", ...a]);
+      it("--skills and --unset skills work on add and update", async () => {
+        expect(await add("--skills", "pdf, zip")).toBe(0);
+        expect(loadDefinition("a").skills).toEqual(["pdf", "zip"]);
+        expect(await main(["definition", "update", "a", "--skills", "zip"])).toBe(0);
+        expect(loadDefinition("a").skills).toEqual(["zip"]);
+        expect(await main(["definition", "update", "a", "--unset", "skills"])).toBe(0);
+        expect("skills" in loadDefinition("a")).toBe(false);
+      });
+      it("add fails for an unregistered skill with the add hint", async () => {
+        expect(await add("--skills", "pdf,nope")).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: nope; add it: maihem skill add PATH");
+        expect(() => loadDefinition("a")).toThrow();
+      });
+      it("update fails for an unregistered skill", async () => {
+        await add();
+        expect(await main(["definition", "update", "a", "--skills", "nope"])).toBe(1);
+        expect("skills" in loadDefinition("a")).toBe(false);
+      });
+      it("inspect shows skills", async () => {
+        await add("--skills", "pdf");
+        log.mockClear();
+        expect(await main(["definition", "inspect", "a"])).toBe(0);
+        expect(out()).toContain("skills:\n  - pdf\n");
+      });
+      it("apply rejects an unregistered skill and saves nothing", async () => {
+        const f = path.join(home, "s.yaml");
+        fs.writeFileSync(f, "providers:\n  p2: {kind: openai}\ndefinitions:\n  d1: {provider: p2, model: m, skills: [pdf]}\n  d2: {provider: p2, model: m, skills: [nope]}\n");
+        expect(await main(["apply", "-f", f])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: nope; add it: maihem skill add PATH");
+        expect(() => loadProvider("p2")).toThrow();
+        expect(() => loadDefinition("d1")).toThrow();
+      });
+    });
+  });
+
   describe("provider", () => {
     const add = (...a: string[]) => main(["provider", "add", ...a]);
     it("provider add then ls and inspect (masked)", async () => {
@@ -357,6 +533,14 @@ describe("main", () => {
     expect(fs.existsSync(runFile("d1"))).toBe(false);
     expect(fs.existsSync(sockPath("d1"))).toBe(false);
   });
+  // req: 1-add-skills/TR-22
+  it("stop of a state without a pid exits 0 and leaves it exited", async () => {
+    const kill = vi.spyOn(process, "kill");
+    saveState({ id: "n1", name: "a", status: "exited", exitCode: 1, detail: "spawn failed: spawn ENOENT", workdir: "/w", sandbox: true, started: "2026-01-01T00:00:00.000Z", log: logPath("n1"), sock: sockPath("n1") });
+    expect(await main(["stop", "n1"])).toBe(0);
+    expect(loadState("n1").status).toBe("exited");
+    expect(kill).not.toHaveBeenCalled();
+  });
   it("stop --discard sends a stop message without apply", async () => {
     const sock = path.join(os.tmpdir(), `mh-stop-${process.pid}.sock`);
     fs.rmSync(sock, { force: true });
@@ -378,7 +562,7 @@ describe("main", () => {
     expect(child.signalCode).toBe("SIGTERM");
   });
   it("launch is dispatched with the run source forms", async () => {
-    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn() } as never);
+    vi.spyOn(deps, "spawn").mockReturnValue({ pid: 4242, unref: vi.fn(), on: vi.fn() } as never);
     saveProvider({ name: "openai", kind: "openai", api_key: "k" });
     saveDefinition(def("a"));
     expect(await main(["launch", "a", "-d", "--no-sandbox", "hi"])).toBe(0);

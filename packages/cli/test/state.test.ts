@@ -44,6 +44,9 @@ describe("state", () => {
   it("isAlive(process.pid) true", () => {
     expect(isAlive(process.pid)).toBe(true);
   });
+  it("isAlive(undefined) false", () => {
+    expect(isAlive(undefined)).toBe(false);
+  });
   it("isAlive(999999) false", () => {
     expect(isAlive(999999)).toBe(false);
   });
@@ -54,6 +57,13 @@ describe("state", () => {
     expect(loadState("dead").status).toBe("exited");
     const live = mk("live", "2026-01-01T00:00:00.000Z");
     expect(refresh(live).status).toBe("running");
+  });
+  // req: 1-add-skills/TR-24
+  it("refresh keeps a running state without a pid running", () => {
+    const s = { ...mk("nopid", "2026-01-01T00:00:00.000Z"), pid: undefined };
+    saveState(s);
+    expect(refresh(s).status).toBe("running");
+    expect(loadState("nopid").status).toBe("running");
   });
   it("removeState deletes the state, log, run file and socket", () => {
     const a = mk("rm1", "2026-01-01T00:00:00.000Z");
@@ -80,5 +90,15 @@ describe("state", () => {
     fs.writeFileSync(eventsPath("rm2"), "{}\n");
     removeState(a);
     expect(fs.existsSync(eventsPath("rm2"))).toBe(false);
+  });
+  // req: 1-add-skills/TR-9
+  it("removeState removes the frozen skills folder", () => {
+    const a = mk("rm3", "2026-01-01T00:00:00.000Z");
+    saveState(a);
+    const skills = path.join(home, "agents", "rm3.skills");
+    fs.mkdirSync(path.join(skills, "pdf"), { recursive: true });
+    fs.writeFileSync(path.join(skills, "pdf", "SKILL.md"), "d\n");
+    removeState(a);
+    expect(fs.existsSync(skills)).toBe(false);
   });
 });
