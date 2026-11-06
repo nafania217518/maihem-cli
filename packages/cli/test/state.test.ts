@@ -58,6 +58,13 @@ describe("state", () => {
     const live = mk("live", "2026-01-01T00:00:00.000Z");
     expect(refresh(live).status).toBe("running");
   });
+  // req: 1-add-skills/TR-24
+  it("refresh keeps a running state without a pid running", () => {
+    const s = { ...mk("nopid", "2026-01-01T00:00:00.000Z"), pid: undefined };
+    saveState(s);
+    expect(refresh(s).status).toBe("running");
+    expect(loadState("nopid").status).toBe("running");
+  });
   it("removeState deletes the state, log, run file and socket", () => {
     const a = mk("rm1", "2026-01-01T00:00:00.000Z");
     const b = mk("keep", "2026-01-01T00:00:00.000Z");

@@ -65,7 +65,7 @@ export function isAlive(pid: number | undefined): boolean {
 }
 
 export function refresh(s: AgentState): AgentState {
-  if (s.status === "running" && !isAlive(s.pid)) {
+  if (s.status === "running" && s.pid !== undefined && !isAlive(s.pid)) {
     s.status = "exited";
     saveState(s);
   }
