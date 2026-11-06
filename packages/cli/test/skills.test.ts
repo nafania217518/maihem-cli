@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -143,6 +143,27 @@ describe("addSkill and updateSkill when the copy fails", () => {
     expect(() => updateSkill("aa", source("---\nname: aa\ndescription: new\n---\n", true))).toThrow(/EACCES/);
     expect(loadSkill("aa").description).toBe("old");
     expect(skills()).toEqual(["aa"]);
+  });
+});
+
+// req: 1-add-skills/TR-18
+describe("updateSkill when the final rename fails", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("a failed final rename in update keeps the old copy registered", () => {
+    const root = newHome();
+    addSkill(source(root, "aa"));
+    const next = path.join(root, "next");
+    fs.mkdirSync(next);
+    fs.writeFileSync(path.join(next, "SKILL.md"), "---\nname: aa\ndescription: new\n---\n");
+    const rename = fs.renameSync;
+    let calls = 0;
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (++calls === 2) throw new Error("rename failed");
+      rename(from, to);
+    });
+    expect(() => updateSkill("aa", next)).toThrow("rename failed");
+    expect(loadSkill("aa").description).toBe("aa skill");
+    expect(fs.readdirSync(path.join(root, "home", "skills")).filter((n) => !n.startsWith("."))).toEqual(["aa"]);
   });
 });
 

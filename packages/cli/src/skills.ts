@@ -96,7 +96,12 @@ export function updateSkill(name: string, src: string): void {
   fs.rmSync(old, { recursive: true, force: true });
   const fresh = copyToFresh(name, src);
   fs.renameSync(target, old);
-  fs.renameSync(fresh, target);
+  try {
+    fs.renameSync(fresh, target);
+  } catch (e) {
+    fs.renameSync(old, target);
+    throw e;
+  }
   fs.rmSync(old, { recursive: true, force: true });
 }
 
