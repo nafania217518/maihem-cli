@@ -207,6 +207,9 @@ The BR list is in the task item. Each test that proves a TR carries `// req: 1-a
 - TR-22 (BR-12): MUST make `maihem stop ID` on a state with no pid send no signal, exit 0, and leave the state exited. (Amendment approved during the task.)
   - tests: `main.test.ts`: stop of a state without a pid exits 0 and the state reads exited
 
+- TR-23 (BR-10): MUST make `spawnAgent` save no placeholder pid before the child exists. It MUST also remove the state when any step before the spawn throws (run file write, log open), as TR-19 does for the spawn itself, so no state reads "running" forever. (Amendment approved during the task.)
+  - tests: `run.test.ts`: a run-file write failure leaves no state; a log-open failure leaves no state; a state saved before the spawn has no pid
+
 ## Test scope
 
 No existing case breaks, reworks or is removed. Three close calls:
