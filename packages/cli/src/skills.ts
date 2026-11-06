@@ -68,3 +68,21 @@ export function skillFiles(skill: Skill): string[] {
     .map((f) => f.split(path.sep).join("/"))
     .sort();
 }
+
+// Parses and copies to a hidden sibling first, so a refused PATH leaves the old copy as it was.
+export function updateSkill(name: string, src: string): void {
+  loadSkill(name);
+  const parsed = parseSkill(src);
+  if (parsed.name !== name) throw new Error(`skill update: ${src} holds skill "${parsed.name}", not "${name}"`);
+  const target = skillDir(name), fresh = skillDir(`.${name}.new`), old = skillDir(`.${name}.old`);
+  for (const d of [fresh, old]) fs.rmSync(d, { recursive: true, force: true });
+  try {
+    copyFolder(src, fresh);
+  } catch (e) {
+    fs.rmSync(fresh, { recursive: true, force: true });
+    throw e;
+  }
+  fs.renameSync(target, old);
+  fs.renameSync(fresh, target);
+  fs.rmSync(old, { recursive: true, force: true });
+}

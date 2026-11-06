@@ -327,6 +327,38 @@ describe("main", () => {
         expect(err.mock.calls[0][0]).toBe("error: no such skill: nope; add it: maihem skill add PATH");
       });
     });
+    // req: 1-add-skills/TR-4
+    describe("update", () => {
+      it("update replaces the copy and drops removed files", async () => {
+        const v1 = src("pdf");
+        fs.writeFileSync(path.join(v1, "old.txt"), "old");
+        await main(["skill", "add", v1]);
+        const v2 = src("v2", "---\nname: pdf\ndescription: New\n---\nb\n");
+        fs.writeFileSync(path.join(v2, "new.txt"), "new");
+        log.mockClear();
+        expect(await main(["skill", "update", "pdf", v2])).toBe(0);
+        expect(out()).toBe("updated pdf");
+        expect(fs.readdirSync(reg("pdf")).sort()).toEqual(["SKILL.md", "new.txt"]);
+        expect(fs.readdirSync(reg())).toEqual(["pdf"]);
+      });
+      it("a different name is refused", async () => {
+        await main(["skill", "add", src("pdf")]);
+        const other = src("zip");
+        expect(await main(["skill", "update", "pdf", other])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe(`error: skill update: ${other} holds skill "zip", not "pdf"`);
+      });
+      it("an unknown name fails", async () => {
+        expect(await main(["skill", "update", "pdf", src("pdf")])).toBe(1);
+        expect(err.mock.calls[0][0]).toBe("error: no such skill: pdf; add it: maihem skill add PATH");
+      });
+      it("a refused update keeps the old copy", async () => {
+        await main(["skill", "add", src("pdf")]);
+        const bad = src("bad", "---\nname: pdf\n");
+        expect(await main(["skill", "update", "pdf", bad])).toBe(1);
+        expect(fs.readFileSync(reg("pdf", "SKILL.md"), "utf8")).toBe("---\ndescription: Reads PDFs\n---\nbody\n");
+        expect(fs.readdirSync(reg())).toEqual(["pdf"]);
+      });
+    });
   });
 
   describe("provider", () => {
