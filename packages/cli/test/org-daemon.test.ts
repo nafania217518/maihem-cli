@@ -44,7 +44,7 @@ function fake(script: Record<string, Agent>, o: Partial<OrgDeps> = {}) {
       spawned.push({ at: Date.now(), id, member, ticket, kind, batch, task, system: d.system!, tools: d.tools, reasoning: d.reasoning, wt: w, branch: git(w, "branch", "--show-current"), head: git(w, "log", "-1", "--format=%an <%ae>|%s"), status: ticket ? t.getTicket(ticket).status : "" });
       t.log("session.started", member, { member, id }, ticket);
       const r = script[member]?.({ t, ops: createOps(t, og), member, ticket, kind, task, wt: w, id });
-      if (r === "nospawn") saveState({ id, name: member, pid: 0, status: "exited", exitCode: 1, detail: "spawn failed: spawn ENOENT", workdir: w, sandbox: false, started: new Date().toISOString(), log: logPath(id), sock: sockPath(id) });
+      if (r === "nospawn") saveState({ id, name: member, status: "exited", exitCode: 1, detail: "spawn failed: spawn ENOENT", workdir: w, sandbox: false, started: new Date().toISOString(), log: logPath(id), sock: sockPath(id) });
       else if (r === "fail" || r === 429) t.log("session.failed", member, { member, id, error: "boom", ...(r === 429 && { status: 429 }) }, ticket);
       else t.log("session.ended", member, { member, id, tokens: 10, input: 7, output: 3, text: `last words of ${id}` }, ticket);
       t.close();

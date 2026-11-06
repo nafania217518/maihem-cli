@@ -61,7 +61,7 @@ export const defaultDeps: OrgDeps = {
   spawn: ({ org, member, def, task, db, ticket, kind, batch, main }) =>
     spawnAgent({ ...def, sandbox: false }, task, resolveProvider(def.provider), "run", true, { name: org.name, member, db, ticket, main, kind, batch }, `${org.name}/${member}`).id,
   alive: (id) => { const s = loadState(id); return s.status === "running" && isAlive(s.pid); },
-  stop: (id) => { try { process.kill(loadState(id).pid, "SIGTERM"); } catch { /* already gone */ } },
+  stop: (id) => { try { const { pid } = loadState(id); if (pid !== undefined) process.kill(pid, "SIGTERM"); } catch { /* already gone */ } },
   pollMs: 1000,
 };
 

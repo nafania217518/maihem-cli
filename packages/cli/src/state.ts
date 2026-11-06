@@ -8,7 +8,7 @@ import { home } from "./registry.ts";
 export interface AgentState {
   id: string;
   name: string;
-  pid: number;
+  pid?: number;
   status: "running" | "exited";
   workdir: string;
   sandbox: boolean;
@@ -54,7 +54,8 @@ export function listStates(): AgentState[] {
     .sort((a, b) => b.started.localeCompare(a.started));
 }
 
-export function isAlive(pid: number): boolean {
+export function isAlive(pid: number | undefined): boolean {
+  if (pid === undefined) return false;
   try {
     process.kill(pid, 0);
     return true;

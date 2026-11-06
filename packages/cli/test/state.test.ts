@@ -44,6 +44,9 @@ describe("state", () => {
   it("isAlive(process.pid) true", () => {
     expect(isAlive(process.pid)).toBe(true);
   });
+  it("isAlive(undefined) false", () => {
+    expect(isAlive(undefined)).toBe(false);
+  });
   it("isAlive(999999) false", () => {
     expect(isAlive(999999)).toBe(false);
   });

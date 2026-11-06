@@ -100,7 +100,7 @@ export function spawnAgent(def: Definition, task: string | undefined, provider: 
     fs.closeSync(logFd);
   }
   child.unref();
-  const running = { ...state, pid: child.pid! };
+  const running = { ...state, pid: child.pid };
   saveState(running);
   // ENOENT, EACCES, EAGAIN and EMFILE arrive later as an event that would crash the caller unheard
   child.on("error", (e) => saveState({ ...running, status: "exited", exitCode: 1, detail: `spawn failed: ${e.message}` }));
