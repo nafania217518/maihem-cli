@@ -202,6 +202,11 @@ The BR list is in the task item. Each test that proves a TR carries `// req: 1-a
 - TR-20 (BR-12): MUST attach an `error` listener to the child in `spawnAgent` that saves the state as exited with exitCode 1 and detail `spawn failed: <message>`. (Amendment approved during the task; BR-12 is in the task item.)
   - tests: `run.test.ts`: an async spawn error marks the state exited with the detail and does not throw
 
+- TR-21 (BR-12): MUST make the org daemon's reap treat a session whose state is exited with detail `spawn failed: …` as a transient failure, with the same backoff as a `session.failed` event. The park message MUST name that detail. (Amendment approved during the task.)
+  - tests: `org-daemon.test.ts`: a session that failed to spawn is reaped as a transient failure with backoff; after 3 failures, the park message names the spawn error
+- TR-22 (BR-12): MUST make `maihem stop ID` on a state with no pid send no signal, exit 0, and leave the state exited. (Amendment approved during the task.)
+  - tests: `main.test.ts`: stop of a state without a pid exits 0 and the state reads exited
+
 ## Test scope
 
 No existing case breaks, reworks or is removed. Three close calls:
