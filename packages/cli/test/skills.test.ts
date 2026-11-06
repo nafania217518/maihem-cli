@@ -35,7 +35,7 @@ describe("parseSkill", () => {
     expect([s.name, s.description, s.body]).toEqual(["x", "Hello", "Hello\n"]);
   });
   it("CRLF and BOM accepted", () => {
-    const s = parseSkill(skill("x", "﻿---\r\nname: pdf\r\ndescription: d\r\n---\r\nbody\r\n"));
+    const s = parseSkill(skill("x", "\uFEFF---\r\nname: pdf\r\ndescription: d\r\n---\r\nbody\r\n"));
     expect([s.name, s.description, s.body]).toEqual(["pdf", "d", "body\r\n"]);
   });
   it("a name of 64 characters accepted, 65 refused", () => {
